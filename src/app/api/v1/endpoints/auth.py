@@ -3,21 +3,19 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt.exceptions import InvalidTokenError
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.dependencies import _require_claim, get_access_token_payload
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
 from app.core.security import (
     create_access_token,
-    decode_access_token,
     generate_refresh_token,
     hash_password,
     hash_refresh_token,
@@ -40,27 +38,13 @@ _DUPLICATE_EMAIL_DETAIL = "A user with this email already exists."
 _INVALID_CREDENTIALS_DETAIL = "Invalid email or password."
 _INVALID_REFRESH_TOKEN_DETAIL = "Invalid refresh token."
 _REFRESH_REUSE_DETAIL = "Refresh token reuse detected; session revoked."
-_INVALID_ACCESS_TOKEN_DETAIL = "Invalid or expired access token."
-
-_bearer = HTTPBearer(auto_error=False)
 
 
 async def _session_id_from_access_token(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    payload: Annotated[dict[str, Any], Depends(get_access_token_payload)],
 ) -> str:
     """Resolve the session id from a bearer access token, or raise 401."""
-    if credentials is None:
-        raise ProblemDetailError(401, ErrorCode.UNAUTHORIZED, _INVALID_ACCESS_TOKEN_DETAIL)
-    try:
-        payload = decode_access_token(credentials.credentials)
-    except InvalidTokenError:
-        raise ProblemDetailError(
-            401, ErrorCode.UNAUTHORIZED, _INVALID_ACCESS_TOKEN_DETAIL
-        ) from None
-    session_id = payload.get("sid")
-    if not isinstance(session_id, str) or not session_id:
-        raise ProblemDetailError(401, ErrorCode.UNAUTHORIZED, _INVALID_ACCESS_TOKEN_DETAIL)
-    return session_id
+    return _require_claim(payload, "sid")
 
 
 async def _issue_session_tokens(db: AsyncSession, user: User) -> AuthResponse:
@@ -79,13 +63,7 @@ async def _issue_session_tokens(db: AsyncSession, user: User) -> AuthResponse:
     return AuthResponse(
         accessToken=access_token,
         refreshToken=refresh_token,
-        user=UserOut(
-            id=user.id,
-            name=user.name,
-            email=user.email,
-            role=Role(user.role),
-            created_at=user.created_at,
-        ),
+        user=UserOut.model_validate(user),
     )
 
 

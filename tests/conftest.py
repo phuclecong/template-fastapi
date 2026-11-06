@@ -1,7 +1,9 @@
 """Shared pytest fixtures.
 
 The HTTP boundary is the single test seam: the ASGI app is driven through httpx's
-``AsyncClient``, backed by a real per-test SQLite database (not mocks).
+``AsyncClient``, backed by a real per-test SQLite database (not mocks). The
+``session_factory`` fixture exposes the same database for seeding setup data
+(e.g. an admin, which has no HTTP birth path by design).
 """
 
 from collections.abc import AsyncIterator
@@ -17,13 +19,22 @@ from app.main import app
 
 
 @pytest.fixture
-async def client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
-    """An AsyncClient bound to the app, backed by a fresh per-test SQLite database."""
+async def session_factory(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """A session factory bound to a fresh per-test SQLite database."""
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+@pytest.fixture
+async def client(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncClient]:
+    """An AsyncClient bound to the app, backed by the shared per-test SQLite database."""
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -40,4 +51,3 @@ async def client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
         yield test_client
 
     app.dependency_overrides.clear()
-    await engine.dispose()
