@@ -15,7 +15,10 @@ uv sync
 
 ## Run
 
+Apply migrations first (creates the `users` and `sessions` tables), then start the server:
+
 ```bash
+uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
 
