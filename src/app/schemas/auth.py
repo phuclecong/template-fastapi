@@ -16,9 +16,29 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=MIN_PASSWORD_LENGTH)
 
 
+class LoginRequest(BaseModel):
+    """Body of POST /auth/login."""
+
+    email: EmailStr
+    password: str
+
+
+class RefreshRequest(BaseModel):
+    """Body of POST /auth/refresh."""
+
+    refreshToken: str
+
+
 class AuthResponse(BaseModel):
     """Access + refresh tokens, plus the authenticated user."""
 
     accessToken: str
     refreshToken: str
     user: User
+
+
+class RefreshResponse(BaseModel):
+    """A rotated access + refresh token pair."""
+
+    accessToken: str
+    refreshToken: str

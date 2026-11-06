@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import jwt
 from argon2 import PasswordHasher
+from argon2.exceptions import Argon2Error
 
 from app.core.config import get_settings
 
@@ -27,6 +29,14 @@ def validate_password(password: str) -> None:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
 
 
+def verify_password(password: str, password_hash: str) -> bool:
+    """Return True if ``password`` matches the Argon2id ``password_hash``."""
+    try:
+        return _password_hasher.verify(password_hash, password)
+    except Argon2Error:
+        return False
+
+
 def create_access_token(*, sub: str, session_id: str) -> str:
     """Encode a JWT access token carrying the user id and session id."""
     settings = get_settings()
@@ -43,6 +53,12 @@ def create_access_token(*, sub: str, session_id: str) -> str:
 def generate_refresh_token() -> str:
     """Generate an opaque refresh token."""
     return secrets.token_urlsafe(32)
+
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    """Decode and validate an access token JWT (raises ``jwt.InvalidTokenError``)."""
+    settings = get_settings()
+    return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
 
 
 def hash_refresh_token(token: str) -> str:
