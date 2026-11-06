@@ -60,3 +60,34 @@ class TaskUpdateRequest(BaseModel):
             if name in self.model_fields_set and getattr(self, name) is None:
                 raise ValueError(f"{name} cannot be null")
         return self
+
+
+class BulkFailure(BaseModel):
+    """A single id that was not updated, and the reason."""
+
+    id: str
+    reason: str
+
+
+class TaskBulkUpdateRequest(BaseModel):
+    """Body of PATCH /tasks/bulk; at least one of status, priority, assigneeId is required."""
+
+    ids: list[str] = Field(min_length=1)
+    status: Status | None = None
+    priority: Priority | None = None
+    assignee_id: str | None = Field(default=None, validation_alias="assigneeId")
+
+    @model_validator(mode="after")
+    def _validate(self) -> TaskBulkUpdateRequest:
+        if "status" in self.model_fields_set and self.status is None:
+            raise ValueError("status cannot be null")
+        if not self.model_fields_set.intersection({"status", "priority", "assignee_id"}):
+            raise ValueError("At least one of status, priority, or assigneeId is required.")
+        return self
+
+
+class TaskBulkUpdateResponse(BaseModel):
+    """Result of a bulk update: how many tasks updated, plus per-id failures."""
+
+    updated: int
+    failed: list[BulkFailure]

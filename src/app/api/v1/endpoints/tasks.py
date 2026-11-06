@@ -14,8 +14,14 @@ from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
 from app.models.task import Priority, Status, Task
 from app.models.user import Role, User
+from app.schemas.task import (
+    BulkFailure,
+    TaskBulkUpdateRequest,
+    TaskBulkUpdateResponse,
+    TaskCreateRequest,
+    TaskUpdateRequest,
+)
 from app.schemas.task import Task as TaskOut
-from app.schemas.task import TaskCreateRequest, TaskUpdateRequest
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -181,6 +187,55 @@ async def create_task(
     db.add(task)
     await db.flush()
     return task
+
+
+@router.patch("/bulk", response_model=TaskBulkUpdateResponse)
+async def bulk_update_tasks(
+    payload: TaskBulkUpdateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> TaskBulkUpdateResponse:
+    """Update status/priority/assignee across many tasks; per-id failures are reported.
+
+    A task is updated as a unit: it either applies all requested fields or is reported
+    in ``failed`` with a reason (not found, forbidden, or an invalid status transition).
+    """
+    if payload.assignee_id is not None:
+        await _require_assignee(db, payload.assignee_id)
+
+    updated = 0
+    failed: list[BulkFailure] = []
+    seen: set[str] = set()
+
+    for task_id in payload.ids:
+        if task_id in seen:
+            continue
+        seen.add(task_id)
+
+        task = await db.get(Task, task_id)
+        if task is None:
+            failed.append(BulkFailure(id=task_id, reason=_TASK_NOT_FOUND_DETAIL))
+            continue
+
+        if current_user.role != Role.ADMIN.value and task.assignee_id != current_user.id:
+            failed.append(BulkFailure(id=task_id, reason=FORBIDDEN_DETAIL))
+            continue
+
+        try:
+            if "status" in payload.model_fields_set and payload.status is not None:
+                _apply_status_transition(task, payload.status)
+            if "priority" in payload.model_fields_set:
+                task.priority = payload.priority.value if payload.priority is not None else None
+            if "assignee_id" in payload.model_fields_set:
+                task.assignee_id = payload.assignee_id
+        except ProblemDetailError as exc:
+            failed.append(BulkFailure(id=task_id, reason=exc.detail))
+            continue
+
+        updated += 1
+
+    await db.flush()
+    return TaskBulkUpdateResponse(updated=updated, failed=failed)
 
 
 @router.get("/{id}", response_model=TaskOut)
