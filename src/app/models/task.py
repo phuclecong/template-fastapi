@@ -39,6 +39,7 @@ class Task(Base):
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default=Status.TODO.value)
+    previous_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     priority: Mapped[str | None] = mapped_column(String(16), nullable=True)
     assignee_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
