@@ -1,0 +1,36 @@
+- Build the API with FastAPI (https://fastapi.tiangolo.com/) and Python
+- API design:
+  - RESTful JSON APIs, versioned under `/api/v1`
+  - OpenAPI (Swagger) schema generated automatically by FastAPI and kept in sync with the frontend MSW/OpenAPI contracts [openapi.yaml](../openapi.yaml)
+  - Consistent pagination, filtering, sorting, and error response envelopes
+- Domain modules:
+  - Auth: register, login, refresh token, logout, password reset/update, roles and permissions
+  - Users: profile management, role assignment, account status
+  - Tasks: CRUD, search with suggestion, bulk actions, status transitions
+  - Settings: user preferences, theme, language, password update
+- Data layer:
+  - SQLAlchemy 2.0 async with Alembic migrations
+  - PostgreSQL for production, SQLite for local/tests
+  - Pydantic v2 schemas for request/response validation and serialization
+- Security:
+  - OAuth2 + JWT access/refresh tokens, password hashing with Argon2/bcrypt
+  - Role-based access control (RBAC) and per-resource authorization
+  - Input validation, CORS, rate limiting, security headers, and data protection best practices
+- Performance and scalability:
+  - Async endpoints and async database access
+  - Query optimization, indexing, and connection pooling
+- Integrations:
+  - API contracts shared with the frontend via generated OpenAPI
+  - Third-party services: payment gateways, shipping providers, marketing tools behind abstracted clients
+- Observability:
+  - Structured logging, request IDs, metrics (Prometheus), and tracing
+  - Error handling middleware with consistent problem details (RFC 9457)
+- Testing and quality:
+  - Unit and integration tests with pytest, httpx, and TestClient
+  - Test coverage thresholds, linting (Ruff), type checking (mypy), formatting (Black)
+  - CI/CD pipelines running tests, migrations check, and OpenAPI schema diff
+- Deployment:
+  - Containerized with Docker, configurable via environment variables
+  - Deployed behind a CDN-friendly reverse proxy with TLS, health checks, and graceful shutdown
+
+- skill should be use: /api-design-principles /fastapi-templates

@@ -1,0 +1,604 @@
+openapi: 3.0.3
+info:
+  title: Template Dashboard API
+  version: 0.1.0
+  description: >-
+    Contract-first API for the authenticated dashboard template. This spec is
+    the single source of truth: it generates the MSW mock handlers, the
+    TypeScript client types, and the artifact handed to the FastAPI team.
+servers:
+  - url: /api
+tags:
+  - name: auth
+  - name: users
+  - name: tasks
+  - name: password
+
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      summary: Register a new account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Log in with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: refresh
+      summary: Exchange a refresh token for a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: New access token issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Log out and invalidate the session
+      responses:
+        "204":
+          description: Logged out.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List all users
+      responses:
+        "200":
+          description: List of users.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /users/{id}/role:
+    patch:
+      tags: [users]
+      operationId: updateUserRole
+      summary: Change a user's role (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoleRequest"
+      responses:
+        "200":
+          description: Updated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /users/{id}:
+    delete:
+      tags: [users]
+      operationId: deleteUser
+      summary: Delete a user (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /tasks:
+    get:
+      tags: [tasks]
+      operationId: listTasks
+      summary: List all tasks
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Case-insensitive substring match on the title.
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/Status"
+        - name: priority
+          in: query
+          schema:
+            type: string
+            enum: [low, medium, high]
+        - name: assigneeId
+          in: query
+          schema:
+            type: string
+          description: A user id, or the literal "unassigned" to match tasks with no assignee.
+        - name: dueDate_gte
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Inclusive lower bound on the due date.
+        - name: dueDate_lte
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Inclusive upper bound on the due date.
+        - name: _start
+          in: query
+          schema:
+            type: integer
+          description: Number of matching tasks to skip before returning results. Defaults to 0.
+        - name: _end
+          in: query
+          schema:
+            type: integer
+          description: "Exclusive upper bound on the result slice. When omitted, all matching tasks after `_start` are returned."
+        - name: _sort
+          in: query
+          schema:
+            type: string
+          description: "Field to sort by: `title`, `status`, `priority`, or `dueDate`. Defaults to `title`."
+        - name: _order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+          description: "Sort direction. Defaults to `asc`."
+      responses:
+        "200":
+          description: List of tasks.
+          headers:
+            x-total-count:
+              description: Total number of tasks matching the filters before pagination.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [tasks]
+      operationId: createTask
+      summary: Create a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCreateRequest"
+      responses:
+        "201":
+          description: Created task.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /tasks/bulk:
+    patch:
+      tags: [tasks]
+      operationId: bulkUpdateTasks
+      summary: Update several tasks at once (members may only update their own tasks)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskBulkUpdateRequest"
+      responses:
+        "200":
+          description: Result of the bulk update; per-id failures are reported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskBulkUpdateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /tasks/{id}:
+    patch:
+      tags: [tasks]
+      operationId: updateTask
+      summary: Update a task (members may only update their own tasks)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskUpdateRequest"
+      responses:
+        "200":
+          description: Updated task.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [tasks]
+      operationId: deleteTask
+      summary: Delete a task (members may only delete their own tasks)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /password:
+    put:
+      tags: [password]
+      operationId: updatePassword
+      summary: Update the authenticated user's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordUpdateRequest"
+      responses:
+        "204":
+          description: Password updated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  schemas:
+    Role:
+      type: string
+      enum: [admin, member]
+    Status:
+      type: string
+      enum: [todo, in-progress, done, blocked]
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: not_found
+        message:
+          type: string
+          example: Resource not found.
+    User:
+      type: object
+      required: [id, name, email, role, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: "#/components/schemas/Role"
+        createdAt:
+          type: string
+          format: date-time
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    AuthResponse:
+      type: object
+      required: [accessToken, refreshToken, user]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+    RefreshResponse:
+      type: object
+      required: [accessToken]
+      properties:
+        accessToken:
+          type: string
+    UpdateRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+    Task:
+      type: object
+      required: [id, title, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/Status"
+        priority:
+          type: string
+          enum: [low, medium, high]
+          nullable: true
+        assigneeId:
+          type: string
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TaskCreateRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/Status"
+        priority:
+          type: string
+          enum: [low, medium, high]
+          nullable: true
+        assigneeId:
+          type: string
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+    TaskUpdateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/Status"
+        priority:
+          type: string
+          enum: [low, medium, high]
+          nullable: true
+        assigneeId:
+          type: string
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+    TaskBulkUpdateRequest:
+      type: object
+      required: [ids]
+      description: At least one of status, priority, or assigneeId must be present.
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        status:
+          $ref: "#/components/schemas/Status"
+        priority:
+          type: string
+          enum: [low, medium, high]
+          nullable: true
+        assigneeId:
+          type: string
+          nullable: true
+    TaskBulkUpdateResponse:
+      type: object
+      required: [updated, failed]
+      properties:
+        updated:
+          type: integer
+        failed:
+          type: array
+          items:
+            $ref: "#/components/schemas/BulkFailure"
+    BulkFailure:
+      type: object
+      required: [id, reason]
+      properties:
+        id:
+          type: string
+        reason:
+          type: string
+    PasswordUpdateRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+          format: password
+        newPassword:
+          type: string
+          format: password
+  responses:
+    BadRequest:
+      description: The request body is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Authentication is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: The authenticated user lacks permission.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The request conflicts with existing state.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
