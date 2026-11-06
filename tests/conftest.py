@@ -1,0 +1,60 @@
+"""Shared pytest fixtures.
+
+The HTTP boundary is the single test seam: the ASGI app is driven through httpx's
+``AsyncClient``, backed by a real per-test SQLite database (not mocks). The
+``session_factory`` fixture exposes the same database for seeding setup data
+(e.g. an admin, which has no HTTP birth path by design).
+"""
+
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+import app.models as _models  # noqa: F401  # ensure models register with Base.metadata
+from app.core.database import Base, get_db
+from app.core.ratelimit import reset_auth_rate_limiter
+from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> None:
+    """Start each test with a clean in-memory auth rate limiter."""
+    reset_auth_rate_limiter()
+
+
+@pytest.fixture
+async def session_factory(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """A session factory bound to a fresh per-test SQLite database."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+@pytest.fixture
+async def client(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncClient]:
+    """An AsyncClient bound to the app, backed by the shared per-test SQLite database."""
+
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as test_client:
+        yield test_client
+
+    app.dependency_overrides.clear()
