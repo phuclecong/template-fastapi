@@ -1,17 +1,18 @@
-"""Task endpoints: create, get single, update, delete (POST/GET/PATCH/DELETE /tasks)."""
+"""Task endpoints: list, create, get single, update, delete (GET/POST/PATCH/DELETE /tasks)."""
 
 from __future__ import annotations
 
-from typing import Annotated
+from datetime import date
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Response
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Query, Response
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import FORBIDDEN_DETAIL, get_current_user
 from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
-from app.models.task import Status, Task
+from app.models.task import Priority, Status, Task
 from app.models.user import Role, User
 from app.schemas.task import Task as TaskOut
 from app.schemas.task import TaskCreateRequest, TaskUpdateRequest
@@ -22,6 +23,24 @@ _TASK_NOT_FOUND_DETAIL = "No task exists with this id."
 _BORN_DONE_DETAIL = "A task cannot be created with status done."
 _ASSIGNEE_NOT_FOUND_DETAIL = "No user exists with the given assigneeId."
 _INVALID_STATUS_TRANSITION_DETAIL = "Invalid status transition."
+_INVALID_SORT_FIELD_DETAIL = "Unknown sort field."
+
+# Sort order is the spec's declared order (docs/openapi.yaml §Status/§Priority), not
+# alphabetical and not the enum declaration order — keep them literal.
+_STATUS_SORT_ORDER = {"todo": 0, "in-progress": 1, "done": 2, "blocked": 3}
+_PRIORITY_SORT_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+_SORT_KEYS: dict[str, Any] = {
+    "title": Task.title,
+    "status": case(_STATUS_SORT_ORDER, value=Task.status, else_=len(_STATUS_SORT_ORDER)),
+    "priority": case(_PRIORITY_SORT_ORDER, value=Task.priority, else_=len(_PRIORITY_SORT_ORDER)),
+    "dueDate": Task.due_date,
+}
+
+
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards so ``q`` matches a literal substring, not a pattern."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def _get_task_or_404(db: AsyncSession, task_id: str) -> Task:
@@ -84,6 +103,56 @@ def _apply_status_transition(task: Task, new_status: Status) -> None:
         return
 
     raise ProblemDetailError(400, ErrorCode.VALIDATION_ERROR, _INVALID_STATUS_TRANSITION_DETAIL)
+
+
+@router.get("", response_model=list[TaskOut])
+async def list_tasks(
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+    q: Annotated[str | None, Query()] = None,
+    status: Annotated[Status | None, Query()] = None,
+    priority: Annotated[Priority | None, Query()] = None,
+    assignee_id: Annotated[str | None, Query(alias="assigneeId")] = None,
+    due_date_gte: Annotated[date | None, Query(alias="dueDate_gte")] = None,
+    due_date_lte: Annotated[date | None, Query(alias="dueDate_lte")] = None,
+    _start: Annotated[int, Query(ge=0)] = 0,
+    _end: Annotated[int | None, Query(ge=0)] = None,
+    _sort: Annotated[str, Query()] = "title",
+    _order: Annotated[Literal["asc", "desc"], Query()] = "asc",
+) -> list[Task]:
+    """Return tasks filtered, sorted, and paginated, with the total in ``x-total-count``."""
+    conditions: list[Any] = []
+    if q is not None:
+        conditions.append(Task.title.ilike(f"%{_escape_like(q)}%", escape="\\"))
+    if status is not None:
+        conditions.append(Task.status == status.value)
+    if priority is not None:
+        conditions.append(Task.priority == priority.value)
+    if assignee_id is not None:
+        if assignee_id == "unassigned":
+            conditions.append(Task.assignee_id.is_(None))
+        else:
+            conditions.append(Task.assignee_id == assignee_id)
+    if due_date_gte is not None:
+        conditions.append(Task.due_date >= due_date_gte)
+    if due_date_lte is not None:
+        conditions.append(Task.due_date <= due_date_lte)
+
+    total = await db.scalar(select(func.count()).select_from(Task).where(*conditions))
+
+    sort_key = _SORT_KEYS.get(_sort)
+    if sort_key is None:
+        raise ProblemDetailError(400, ErrorCode.VALIDATION_ERROR, _INVALID_SORT_FIELD_DETAIL)
+    order = sort_key.asc() if _order == "asc" else sort_key.desc()
+
+    statement = select(Task).where(*conditions).order_by(order, Task.id).offset(_start)
+    if _end is not None:
+        statement = statement.limit(max(0, _end - _start))
+
+    tasks = list((await db.scalars(statement)).all())
+    response.headers["x-total-count"] = str(total or 0)
+    return tasks
 
 
 @router.post("", status_code=201, response_model=TaskOut)
