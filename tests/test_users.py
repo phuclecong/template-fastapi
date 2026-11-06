@@ -1,4 +1,4 @@
-"""Users endpoint tests: GET /users, GET /users/me, PATCH /users/{id}/role."""
+"""Users endpoint tests: GET /users, GET /users/me, PATCH /users/{id}/role, DELETE /users/{id}."""
 
 from typing import Any
 
@@ -66,6 +66,20 @@ async def _create_admin(
 ) -> str:
     """Insert an admin directly (admins are born via seed, not /register)."""
     return await _create_user(factory, name=name, email=email, role=Role.ADMIN)
+
+
+def _create_task(
+    client: AsyncClient,
+    *,
+    token: str,
+    assignee_id: str | None = None,
+    title: str = "A task",
+) -> Any:
+    """Create a task via the API (optionally assigned), returning the response."""
+    json: dict[str, Any] = {"title": title}
+    if assignee_id is not None:
+        json["assigneeId"] = assignee_id
+    return client.post("/api/v1/tasks", json=json, headers=_auth(token))
 
 
 async def test_me_returns_authenticated_user(client: AsyncClient) -> None:
@@ -249,3 +263,100 @@ async def test_update_role_invalid_role_returns_422(
 
     assert response.status_code == 422
     assert response.json()["code"] == "validation_error"
+
+
+async def test_admin_deletes_member_and_unassigns_their_tasks(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    member = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    member_id = member.json()["user"]["id"]
+    member_token = member.json()["accessToken"]
+    admin_token = (await _login(client, email="admin@example.com")).json()["accessToken"]
+
+    task = await _create_task(client, token=member_token, assignee_id=member_id)
+    task_id = task.json()["id"]
+
+    response = await client.delete(f"/api/v1/users/{member_id}", headers=_auth(admin_token))
+
+    assert response.status_code == 204
+
+    # The member's account is gone…
+    login_after = await _login(client, email="ada@example.com")
+    assert login_after.status_code == 401
+
+    # …but their tasks survive, unassigned.
+    fetched = await client.get(f"/api/v1/tasks/{task_id}", headers=_auth(admin_token))
+    assert fetched.status_code == 200
+    assert fetched.json()["assigneeId"] is None
+
+
+async def test_member_cannot_delete_user(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    admin_id = await _create_admin(session_factory)
+    member = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    member_token = member.json()["accessToken"]
+
+    response = await client.delete(f"/api/v1/users/{admin_id}", headers=_auth(member_token))
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "forbidden"
+
+
+async def test_admin_cannot_delete_self_even_with_another_admin(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    admin_id = await _create_admin(session_factory, name="Admin One", email="admin1@example.com")
+    await _create_admin(session_factory, name="Admin Two", email="admin2@example.com")
+    admin1_token = (await _login(client, email="admin1@example.com")).json()["accessToken"]
+
+    response = await client.delete(f"/api/v1/users/{admin_id}", headers=_auth(admin1_token))
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "forbidden"
+
+
+async def test_admin_cannot_delete_last_admin(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    admin_id = await _create_admin(session_factory)
+    admin_token = (await _login(client, email="admin@example.com")).json()["accessToken"]
+
+    response = await client.delete(f"/api/v1/users/{admin_id}", headers=_auth(admin_token))
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "forbidden"
+
+
+async def test_admin_can_delete_another_admin_when_not_last(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory, name="Admin One", email="admin1@example.com")
+    admin2_id = await _create_admin(session_factory, name="Admin Two", email="admin2@example.com")
+    admin1_token = (await _login(client, email="admin1@example.com")).json()["accessToken"]
+
+    response = await client.delete(f"/api/v1/users/{admin2_id}", headers=_auth(admin1_token))
+
+    assert response.status_code == 204
+
+
+async def test_delete_unknown_user_returns_404(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    admin_token = (await _login(client, email="admin@example.com")).json()["accessToken"]
+
+    response = await client.delete(
+        "/api/v1/users/00000000-0000-0000-0000-000000000000", headers=_auth(admin_token)
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+
+
+async def test_delete_user_without_token_returns_401(client: AsyncClient) -> None:
+    response = await client.delete("/api/v1/users/some-id")
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "unauthorized"

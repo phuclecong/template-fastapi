@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     api_v1_str: str = "/api/v1"
     environment: str = "development"
     database_url: str = "sqlite+aiosqlite:///./dev.db"
+    # database_url = 'postgresql://postgres:test123!@Localhost/...'
     problems_base_url: str = "https://api.example.com/problems"
 
     # Auth — access token is a JWT carrying the session id; refresh token is a
