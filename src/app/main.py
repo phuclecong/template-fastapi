@@ -7,15 +7,17 @@ from fastapi import FastAPI
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
-from app.core.database import engine
+from app.core.database import async_session_factory, engine
 from app.core.errors import register_exception_handlers
+from app.core.seed import seed_admin
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Run startup/shutdown tasks (e.g. dispose the DB engine on shutdown)."""
+    """Run startup/shutdown tasks (seed admin, dispose the DB engine on shutdown)."""
+    await seed_admin(async_session_factory, settings)
     yield
     await engine.dispose()
 

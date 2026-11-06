@@ -21,6 +21,19 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./dev.db"
     problems_base_url: str = "https://api.example.com/problems"
 
+    # Auth — access token is a JWT carrying the session id; refresh token is a
+    # stateful server-side record (see docs/adr/0002-stateful-refresh-token-sessions.md).
+    jwt_secret: str = "dev-only-secret-change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 30
+
+    # First-admin seed. Set ADMIN_EMAIL and ADMIN_PASSWORD together to create the
+    # first admin at startup; registration always produces a `member`.
+    admin_name: str = "Admin"
+    admin_email: str | None = None
+    admin_password: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

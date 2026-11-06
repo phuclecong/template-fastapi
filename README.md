@@ -19,8 +19,22 @@ uv sync
 uv run uvicorn app.main:app --reload
 ```
 
-The API is served under `/api/v1` (health check at `GET /api/v1/health`). Interactive docs
-are at `/docs`.
+The API is served under `/api/v1` (health check at `GET /api/v1/health`, registration at
+`POST /api/v1/auth/register`). Interactive docs are at `/docs`.
+
+## Configuration
+
+Settings are read from environment variables (or a `.env` file). The important ones:
+
+| Variable                        | Default                        | Purpose                                             |
+| ------------------------------- | ------------------------------ | --------------------------------------------------- |
+| `DATABASE_URL`                  | `sqlite+aiosqlite:///./dev.db` | SQLAlchemy async URL                                |
+| `JWT_SECRET`                    | dev-only placeholder           | HMAC secret for access tokens — set in production   |
+| `ACCESS_TOKEN_EXPIRE_MINUTES`   | `15`                           | JWT access-token lifetime                           |
+| `REFRESH_TOKEN_EXPIRE_DAYS`     | `30`                           | Refresh-session lifetime                            |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | unset                          | Seed the first admin at startup (set both together) |
+
+Run `alembic upgrade head` before starting the app so the seed has its tables.
 
 ## Migrations
 
