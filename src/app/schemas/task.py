@@ -78,9 +78,13 @@ class TaskBulkUpdateRequest(BaseModel):
     assignee_id: str | None = Field(default=None, validation_alias="assigneeId")
 
     @model_validator(mode="after")
-    def _validate(self) -> TaskBulkUpdateRequest:
+    def _reject_null_status(self) -> TaskBulkUpdateRequest:
         if "status" in self.model_fields_set and self.status is None:
             raise ValueError("status cannot be null")
+        return self
+
+    @model_validator(mode="after")
+    def _require_update_field(self) -> TaskBulkUpdateRequest:
         if not self.model_fields_set.intersection({"status", "priority", "assignee_id"}):
             raise ValueError("At least one of status, priority, or assigneeId is required.")
         return self

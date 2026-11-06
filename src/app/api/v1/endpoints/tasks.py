@@ -64,11 +64,15 @@ async def _require_assignee(db: AsyncSession, assignee_id: str) -> None:
         raise ProblemDetailError(400, ErrorCode.VALIDATION_ERROR, _ASSIGNEE_NOT_FOUND_DETAIL)
 
 
+def _is_assignee_or_admin(task: Task, user: User) -> bool:
+    """Return True if ``user`` is an admin or the task's assignee."""
+    return user.role == Role.ADMIN.value or task.assignee_id == user.id
+
+
 def _ensure_assignee_or_admin(task: Task, user: User) -> None:
     """Raise 403 unless ``user`` is an admin or the task's assignee."""
-    if user.role == Role.ADMIN.value or task.assignee_id == user.id:
-        return
-    raise ProblemDetailError(403, ErrorCode.FORBIDDEN, FORBIDDEN_DETAIL)
+    if not _is_assignee_or_admin(task, user):
+        raise ProblemDetailError(403, ErrorCode.FORBIDDEN, FORBIDDEN_DETAIL)
 
 
 def _apply_status_transition(task: Task, new_status: Status) -> None:
@@ -200,14 +204,13 @@ async def bulk_update_tasks(
     A task is updated as a unit: it either applies all requested fields or is reported
     in ``failed`` with a reason (not found, forbidden, or an invalid status transition).
     """
-    if payload.assignee_id is not None:
-        await _require_assignee(db, payload.assignee_id)
-
     updated = 0
     failed: list[BulkFailure] = []
+    updatable: list[Task] = []
     seen: set[str] = set()
 
     for task_id in payload.ids:
+        # A repeated id is updated (and counted) once; the contract leaves this undefined.
         if task_id in seen:
             continue
         seen.add(task_id)
@@ -217,10 +220,18 @@ async def bulk_update_tasks(
             failed.append(BulkFailure(id=task_id, reason=_TASK_NOT_FOUND_DETAIL))
             continue
 
-        if current_user.role != Role.ADMIN.value and task.assignee_id != current_user.id:
+        if not _is_assignee_or_admin(task, current_user):
             failed.append(BulkFailure(id=task_id, reason=FORBIDDEN_DETAIL))
             continue
 
+        updatable.append(task)
+
+    # Validate the assignee only when it will actually be applied to a task the caller
+    # can touch, mirroring single-PATCH (ownership is checked before assignee existence).
+    if payload.assignee_id is not None and updatable:
+        await _require_assignee(db, payload.assignee_id)
+
+    for task in updatable:
         try:
             if "status" in payload.model_fields_set and payload.status is not None:
                 _apply_status_transition(task, payload.status)
@@ -229,7 +240,7 @@ async def bulk_update_tasks(
             if "assignee_id" in payload.model_fields_set:
                 task.assignee_id = payload.assignee_id
         except ProblemDetailError as exc:
-            failed.append(BulkFailure(id=task_id, reason=exc.detail))
+            failed.append(BulkFailure(id=task.id, reason=exc.detail))
             continue
 
         updated += 1

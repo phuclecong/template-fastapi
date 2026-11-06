@@ -244,6 +244,29 @@ async def test_bulk_unknown_assignee_returns_400(client: AsyncClient) -> None:
     assert response.json()["code"] == "validation_error"
 
 
+async def test_bulk_unknown_assignee_on_others_tasks_reports_forbidden_not_400(
+    client: AsyncClient,
+) -> None:
+    other = await _register(client, email="other@example.com")
+    theirs = await _create_task(client, token=other["accessToken"], assignee_id=other["user"]["id"])
+    member = await _register(client, email="member@example.com")
+
+    response = await _bulk(
+        client,
+        token=member["accessToken"],
+        json={
+            "ids": [theirs["id"]],
+            "assigneeId": "00000000-0000-0000-0000-000000000000",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "updated": 0,
+        "failed": [{"id": theirs["id"], "reason": _FORBIDDEN_REASON}],
+    }
+
+
 async def test_bulk_null_clears_priority_and_assignee(client: AsyncClient) -> None:
     member = await _register(client, email="ada@example.com")
     token = member["accessToken"]
