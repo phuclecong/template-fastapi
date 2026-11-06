@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import _require_claim, get_access_token_payload
+from app.api.v1.dependencies import get_current_session_id
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
@@ -38,13 +38,6 @@ _DUPLICATE_EMAIL_DETAIL = "A user with this email already exists."
 _INVALID_CREDENTIALS_DETAIL = "Invalid email or password."
 _INVALID_REFRESH_TOKEN_DETAIL = "Invalid refresh token."
 _REFRESH_REUSE_DETAIL = "Refresh token reuse detected; session revoked."
-
-
-async def _session_id_from_access_token(
-    payload: Annotated[dict[str, Any], Depends(get_access_token_payload)],
-) -> str:
-    """Resolve the session id from a bearer access token, or raise 401."""
-    return _require_claim(payload, "sid")
 
 
 async def _issue_session_tokens(db: AsyncSession, user: User) -> AuthResponse:
@@ -152,7 +145,7 @@ async def refresh(
 
 @router.post("/logout", status_code=204)
 async def logout(
-    session_id: Annotated[str, Depends(_session_id_from_access_token)],
+    session_id: Annotated[str, Depends(get_current_session_id)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Revoke the session identified by the access token (idempotent)."""

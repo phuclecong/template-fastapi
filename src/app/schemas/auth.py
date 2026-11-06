@@ -23,6 +23,13 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordUpdateRequest(BaseModel):
+    """Body of PUT /password."""
+
+    currentPassword: str
+    newPassword: str = Field(min_length=MIN_PASSWORD_LENGTH)
+
+
 class RefreshRequest(BaseModel):
     """Body of POST /auth/refresh."""
 

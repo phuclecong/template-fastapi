@@ -52,6 +52,13 @@ async def get_current_user(
     return user
 
 
+async def get_current_session_id(
+    payload: Annotated[dict[str, Any], Depends(get_access_token_payload)],
+) -> str:
+    """Resolve the session id from the bearer access token, or raise 401."""
+    return _require_claim(payload, "sid")
+
+
 async def get_current_admin(
     user: Annotated[User, Depends(get_current_user)],
 ) -> User:
