@@ -15,7 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 import app.models as _models  # noqa: F401  # ensure models register with Base.metadata
 from app.core.database import Base, get_db
+from app.core.ratelimit import reset_auth_rate_limiter
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> None:
+    """Start each test with a clean in-memory auth rate limiter."""
+    reset_auth_rate_limiter()
 
 
 @pytest.fixture

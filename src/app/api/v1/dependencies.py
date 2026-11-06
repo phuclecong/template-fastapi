@@ -1,23 +1,41 @@
-"""Shared FastAPI dependencies: bearer-token authentication and role guards."""
+"""Shared FastAPI dependencies: rate limiting, bearer-token auth, and role guards."""
 
 from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
+from app.core.ratelimit import SlidingWindowRateLimiter, get_auth_rate_limiter
 from app.core.security import decode_access_token
 from app.models.user import Role, User
 
 INVALID_ACCESS_TOKEN_DETAIL = "Invalid or expired access token."
 FORBIDDEN_DETAIL = "You do not have permission to perform this action."
+TOO_MANY_REQUESTS_DETAIL = "Too many requests."
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def enforce_rate_limit(
+    request: Request,
+    limiter: Annotated[SlidingWindowRateLimiter, Depends(get_auth_rate_limiter)],
+) -> None:
+    """Reject (429) a request once its per-IP, per-endpoint budget is exhausted.
+
+    Keyed on ``request.client.host``. Behind a reverse proxy that address is the
+    proxy for every client, so a deployment there must instead key on a trusted
+    ``X-Forwarded-For`` value (out of scope here).
+    """
+    ip = request.client.host if request.client is not None else "unknown"
+    key = f"{request.url.path}:{ip}"
+    if not limiter.allow(key):
+        raise ProblemDetailError(429, ErrorCode.TOO_MANY_REQUESTS, TOO_MANY_REQUESTS_DETAIL)
 
 
 def _require_claim(payload: dict[str, Any], key: str) -> str:

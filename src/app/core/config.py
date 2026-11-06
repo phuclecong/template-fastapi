@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 30
 
+    # Rate limiting on the auth brute-force surface (login/register/refresh),
+    # keyed by client IP per endpoint.
+    auth_rate_limit_max_attempts: int = 5
+    auth_rate_limit_window_seconds: int = 60
+
     # First-admin seed. Set ADMIN_EMAIL and ADMIN_PASSWORD together to create the
     # first admin at startup; registration always produces a `member`.
     admin_name: str = "Admin"

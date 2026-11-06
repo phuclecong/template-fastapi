@@ -10,7 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_session_id
+from app.api.v1.dependencies import enforce_rate_limit, get_current_session_id
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
@@ -64,6 +64,7 @@ async def _issue_session_tokens(db: AsyncSession, user: User) -> AuthResponse:
 async def register(
     payload: RegisterRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _rate_limit: Annotated[None, Depends(enforce_rate_limit)],
 ) -> AuthResponse:
     """Create a user (role ``member``) and start a session."""
     email = normalize_email(payload.email)
@@ -92,6 +93,7 @@ async def register(
 async def login(
     payload: LoginRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _rate_limit: Annotated[None, Depends(enforce_rate_limit)],
 ) -> AuthResponse:
     """Start a session for a user with valid email + password."""
     email = normalize_email(payload.email)
@@ -107,6 +109,7 @@ async def login(
 async def refresh(
     payload: RefreshRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _rate_limit: Annotated[None, Depends(enforce_rate_limit)],
 ) -> RefreshResponse:
     """Rotate a refresh token; presenting a stale (already-rotated) one revokes the session."""
     presented_hash = hash_refresh_token(payload.refreshToken)
