@@ -7,7 +7,7 @@ info:
     the single source of truth: it generates the MSW mock handlers, the
     TypeScript client types, and the artifact handed to the FastAPI team.
 servers:
-  - url: /api
+  - url: /api/v1
 tags:
   - name: auth
   - name: users
@@ -103,15 +103,46 @@ paths:
       tags: [users]
       operationId: listUsers
       summary: List all users
+      parameters:
+        - name: _start
+          in: query
+          schema:
+            type: integer
+          description: Number of matching users to skip before returning results. Defaults to 0.
+        - name: _end
+          in: query
+          schema:
+            type: integer
+          description: Exclusive upper bound on the result slice. When omitted, all matching users after `_start` are returned.
       responses:
         "200":
           description: List of users.
+          headers:
+            x-total-count:
+              description: Total number of users before pagination.
+              schema:
+                type: integer
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /users/me:
+    get:
+      tags: [users]
+      operationId: getCurrentUser
+      summary: Get the authenticated user's profile
+      responses:
+        "200":
+          description: The authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -289,6 +320,27 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
   /tasks/{id}:
+    get:
+      tags: [tasks]
+      operationId: getTask
+      summary: Get a task by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The task.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
     patch:
       tags: [tasks]
       operationId: updateTask
@@ -369,14 +421,29 @@ components:
       enum: [todo, in-progress, done, blocked]
     Error:
       type: object
-      required: [code, message]
+      required: [type, title, status, detail]
       properties:
+        type:
+          type: string
+          format: uri
+          description: A URI reference identifying the problem type.
+          example: "https://api.example.com/problems/not-found"
+        title:
+          type: string
+          description: A short, human-readable summary of the problem type.
+          example: Resource not found.
+        status:
+          type: integer
+          description: The HTTP status code.
+          example: 404
+        detail:
+          type: string
+          description: A human-readable explanation specific to this occurrence.
+          example: No task exists with id 123.
         code:
           type: string
+          description: Stable machine-readable code. One of validation_error, unauthorized, forbidden, not_found, conflict, too_many_requests, internal_error.
           example: not_found
-        message:
-          type: string
-          example: Resource not found.
     User:
       type: object
       required: [id, name, email, role, createdAt]
@@ -433,9 +500,11 @@ components:
           type: string
     RefreshResponse:
       type: object
-      required: [accessToken]
+      required: [accessToken, refreshToken]
       properties:
         accessToken:
+          type: string
+        refreshToken:
           type: string
     UpdateRoleRequest:
       type: object

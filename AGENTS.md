@@ -11,3 +11,7 @@ Five canonical roles mapped 1:1 to label strings of the same name. See `docs/age
 ### Domain docs
 
 Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Final step: do not auto commit or push code to git
+
+Keep generated commit message but do not commit or push code automatically, I need to have a final review.
