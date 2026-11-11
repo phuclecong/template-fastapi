@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     # database_url = 'postgresql://postgres:test123!@Localhost/...'
     problems_base_url: str = "https://api.example.com/problems"
 
+    # CORS — allowed browser origins for cross-origin requests from the React SPA.
+    # Dev serves on Vite's default ports; add production origins by setting
+    # CORS_ORIGINS to a JSON array, e.g. '["https://app.example.com"]'.
+    cors_origins: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ]
+
     # Auth — access token is a JWT carrying the session id; refresh token is a
     # stateful server-side record (see docs/adr/0002-stateful-refresh-token-sessions.md).
     jwt_secret: str = "dev-only-secret-change-me-in-production"

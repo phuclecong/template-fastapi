@@ -36,6 +36,7 @@ Settings are read from environment variables (or a `.env` file). The important o
 | `ACCESS_TOKEN_EXPIRE_MINUTES`   | `15`                           | JWT access-token lifetime                           |
 | `REFRESH_TOKEN_EXPIRE_DAYS`     | `30`                           | Refresh-session lifetime                            |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | unset                          | Seed the first admin at startup (set both together) |
+| `CORS_ORIGINS`                  | localhost Vite dev origins     | Allowed browser origins (JSON array)              |
 
 Run `alembic upgrade head` before starting the app so the seed has its tables.
 
