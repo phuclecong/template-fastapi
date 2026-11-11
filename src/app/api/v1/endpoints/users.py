@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_admin, get_current_user
@@ -22,6 +22,19 @@ _USER_NOT_FOUND_DETAIL = "No user exists with this id."
 _LAST_ADMIN_DETAIL = "Cannot demote the last admin."
 _SELF_DELETE_DETAIL = "An admin cannot delete their own account."
 _LAST_ADMIN_DELETE_DETAIL = "Cannot delete the last admin."
+_INVALID_SORT_FIELD_DETAIL = "Unknown sort field."
+
+_SORT_KEYS: dict[str, Any] = {
+    "name": User.name,
+    "email": User.email,
+    "role": User.role,
+    "createdAt": User.created_at,
+}
+
+
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards so ``q`` matches a literal substring, not a pattern."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def _admin_count(db: AsyncSession) -> int:
@@ -44,14 +57,37 @@ async def list_users(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
     _current_user: Annotated[User, Depends(get_current_user)],
+    q: Annotated[str | None, Query()] = None,
+    role: Annotated[Role | None, Query()] = None,
     _start: Annotated[int, Query(ge=0)] = 0,
     _end: Annotated[int | None, Query(ge=0)] = None,
+    _sort: Annotated[str, Query()] = "name",
+    _order: Annotated[Literal["asc", "desc"], Query()] = "asc",
 ) -> list[User]:
-    """Return a paginated slice of users, with the total in ``x-total-count``."""
-    total = await db.scalar(select(func.count()).select_from(User))
-    statement = select(User).order_by(User.created_at, User.id).offset(_start)
+    """Return users filtered, sorted, and paginated, with the total in ``x-total-count``."""
+    conditions: list[Any] = []
+    if q is not None:
+        pattern = f"%{_escape_like(q)}%"
+        conditions.append(
+            or_(
+                User.name.ilike(pattern, escape="\\"),
+                User.email.ilike(pattern, escape="\\"),
+            )
+        )
+    if role is not None:
+        conditions.append(User.role == role.value)
+
+    total = await db.scalar(select(func.count()).select_from(User).where(*conditions))
+
+    sort_key = _SORT_KEYS.get(_sort)
+    if sort_key is None:
+        raise ProblemDetailError(400, ErrorCode.VALIDATION_ERROR, _INVALID_SORT_FIELD_DETAIL)
+    order = sort_key.asc() if _order == "asc" else sort_key.desc()
+
+    statement = select(User).where(*conditions).order_by(order, User.id).offset(_start)
     if _end is not None:
         statement = statement.limit(max(0, _end - _start))
+
     users = list((await db.scalars(statement)).all())
     response.headers["x-total-count"] = str(total or 0)
     return users

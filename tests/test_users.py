@@ -140,8 +140,137 @@ async def test_list_users_paginates_with_start_and_end(
     assert response.status_code == 200
     assert response.headers["x-total-count"] == "4"
     users = response.json()
-    # Ordered by creation: admin, ada, grace, linus -> slice [1, 3) is ada + grace.
-    assert [user["email"] for user in users] == ["ada@example.com", "grace@example.com"]
+    # Default sort is name: Ada, Admin, Grace, Linus -> slice [1, 3) is admin + grace.
+    assert [user["email"] for user in users] == ["admin@example.com", "grace@example.com"]
+
+
+async def test_list_users_filters_by_q_on_name_and_email(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    await _register(client, name="Ada Lovelace", email="ada@example.com")
+    await _register(client, name="Grace Hopper", email="grace@example.com")
+    member_token = (await _login(client, email="ada@example.com")).json()["accessToken"]
+
+    by_name = await client.get("/api/v1/users", params={"q": "GRACE"}, headers=_auth(member_token))
+    by_email = await client.get(
+        "/api/v1/users", params={"q": "admin@"}, headers=_auth(member_token)
+    )
+
+    assert by_name.status_code == 200
+    assert by_name.headers["x-total-count"] == "1"
+    assert [user["email"] for user in by_name.json()] == ["grace@example.com"]
+
+    assert by_email.status_code == 200
+    assert by_email.headers["x-total-count"] == "1"
+    assert [user["email"] for user in by_email.json()] == ["admin@example.com"]
+
+
+async def test_list_users_filters_by_role(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    await _register(client, name="Ada Lovelace", email="ada@example.com")
+    member_token = (await _login(client, email="ada@example.com")).json()["accessToken"]
+
+    admins = await client.get(
+        "/api/v1/users", params={"role": "admin"}, headers=_auth(member_token)
+    )
+    members = await client.get(
+        "/api/v1/users", params={"role": "member"}, headers=_auth(member_token)
+    )
+
+    assert admins.status_code == 200
+    assert admins.headers["x-total-count"] == "1"
+    assert [user["email"] for user in admins.json()] == ["admin@example.com"]
+    assert members.status_code == 200
+    assert members.headers["x-total-count"] == "1"
+    assert [user["email"] for user in members.json()] == ["ada@example.com"]
+
+
+async def test_list_users_sorts_by_name_desc(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory, name="Admin", email="admin@example.com")
+    await _register(client, name="Ada Lovelace", email="ada@example.com")
+    await _register(client, name="Grace Hopper", email="grace@example.com")
+    member_token = (await _login(client, email="ada@example.com")).json()["accessToken"]
+
+    response = await client.get(
+        "/api/v1/users",
+        params={"_sort": "name", "_order": "desc"},
+        headers=_auth(member_token),
+    )
+
+    assert [user["name"] for user in response.json()] == ["Grace Hopper", "Admin", "Ada Lovelace"]
+
+
+async def test_list_users_sorts_by_role(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory, name="Zed Admin", email="zadmin@example.com")
+    await _register(client, name="A Member", email="amember@example.com")
+    await _register(client, name="B Member", email="bmember@example.com")
+    member_token = (await _login(client, email="amember@example.com")).json()["accessToken"]
+
+    response = await client.get(
+        "/api/v1/users", params={"_sort": "role"}, headers=_auth(member_token)
+    )
+
+    assert [user["role"] for user in response.json()] == ["admin", "member", "member"]
+
+
+async def test_list_users_total_count_reflects_filters(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    await _register(client, name="Ada Lovelace", email="ada@example.com")
+    await _register(client, name="Grace Hopper", email="grace@example.com")
+    member_token = (await _login(client, email="ada@example.com")).json()["accessToken"]
+
+    response = await client.get(
+        "/api/v1/users",
+        params={"q": "example.com", "_start": 0, "_end": 2},
+        headers=_auth(member_token),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-total-count"] == "3"
+    assert len(response.json()) == 2
+
+
+async def test_list_users_rejects_unknown_sort_field(client: AsyncClient) -> None:
+    registered = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    token = registered.json()["accessToken"]
+
+    response = await client.get("/api/v1/users", params={"_sort": "bogus"}, headers=_auth(token))
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_list_users_rejects_invalid_order(client: AsyncClient) -> None:
+    registered = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    token = registered.json()["accessToken"]
+
+    response = await client.get(
+        "/api/v1/users", params={"_order": "sideways"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_list_users_rejects_invalid_role(client: AsyncClient) -> None:
+    registered = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    token = registered.json()["accessToken"]
+
+    response = await client.get(
+        "/api/v1/users", params={"role": "superadmin"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
 
 
 async def test_list_users_without_token_returns_401(client: AsyncClient) -> None:

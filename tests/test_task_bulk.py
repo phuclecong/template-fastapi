@@ -267,7 +267,25 @@ async def test_bulk_unknown_assignee_on_others_tasks_reports_forbidden_not_400(
     }
 
 
-async def test_bulk_null_clears_priority_and_assignee(client: AsyncClient) -> None:
+async def test_bulk_sets_due_date(client: AsyncClient) -> None:
+    member = await _register(client, email="ada@example.com")
+    token = member["accessToken"]
+    task = await _create_task(client, token=token, assignee_id=member["user"]["id"])
+
+    response = await _bulk(
+        client,
+        token=token,
+        json={"ids": [task["id"]], "dueDate": "2026-12-31"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"updated": 1, "failed": []}
+
+    after = await client.get(f"/api/v1/tasks/{task['id']}", headers=_auth(token))
+    assert after.json()["dueDate"] == "2026-12-31"
+
+
+async def test_bulk_null_clears_priority_assignee_and_due_date(client: AsyncClient) -> None:
     member = await _register(client, email="ada@example.com")
     token = member["accessToken"]
     task = await _create_task(
@@ -275,12 +293,13 @@ async def test_bulk_null_clears_priority_and_assignee(client: AsyncClient) -> No
         token=token,
         assignee_id=member["user"]["id"],
         priority="high",
+        dueDate="2026-01-01",
     )
 
     response = await _bulk(
         client,
         token=token,
-        json={"ids": [task["id"]], "priority": None, "assigneeId": None},
+        json={"ids": [task["id"]], "priority": None, "assigneeId": None, "dueDate": None},
     )
 
     assert response.status_code == 200
@@ -289,6 +308,7 @@ async def test_bulk_null_clears_priority_and_assignee(client: AsyncClient) -> No
     after = await client.get(f"/api/v1/tasks/{task['id']}", headers=_auth(token))
     assert after.json()["priority"] is None
     assert after.json()["assigneeId"] is None
+    assert after.json()["dueDate"] is None
 
 
 async def test_admin_can_bulk_update_any_task(

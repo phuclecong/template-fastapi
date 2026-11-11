@@ -70,12 +70,13 @@ class BulkFailure(BaseModel):
 
 
 class TaskBulkUpdateRequest(BaseModel):
-    """Body of PATCH /tasks/bulk; at least one of status, priority, assigneeId is required."""
+    """Body of PATCH /tasks/bulk; requires one of status, priority, assigneeId, or dueDate."""
 
     ids: list[str] = Field(min_length=1)
     status: Status | None = None
     priority: Priority | None = None
     assignee_id: str | None = Field(default=None, validation_alias="assigneeId")
+    due_date: date | None = Field(default=None, validation_alias="dueDate")
 
     @model_validator(mode="after")
     def _reject_null_status(self) -> TaskBulkUpdateRequest:
@@ -85,8 +86,12 @@ class TaskBulkUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _require_update_field(self) -> TaskBulkUpdateRequest:
-        if not self.model_fields_set.intersection({"status", "priority", "assignee_id"}):
-            raise ValueError("At least one of status, priority, or assigneeId is required.")
+        if not self.model_fields_set.intersection(
+            {"status", "priority", "assignee_id", "due_date"}
+        ):
+            raise ValueError(
+                "At least one of status, priority, assigneeId, or dueDate is required."
+            )
         return self
 
 

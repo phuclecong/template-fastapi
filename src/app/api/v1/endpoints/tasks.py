@@ -199,7 +199,7 @@ async def bulk_update_tasks(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> TaskBulkUpdateResponse:
-    """Update status/priority/assignee across many tasks; per-id failures are reported.
+    """Update status/priority/assignee/due date across many tasks; per-id failures are reported.
 
     A task is updated as a unit: it either applies all requested fields or is reported
     in ``failed`` with a reason (not found, forbidden, or an invalid status transition).
@@ -239,6 +239,8 @@ async def bulk_update_tasks(
                 task.priority = payload.priority.value if payload.priority is not None else None
             if "assignee_id" in payload.model_fields_set:
                 task.assignee_id = payload.assignee_id
+            if "due_date" in payload.model_fields_set:
+                task.due_date = payload.due_date
         except ProblemDetailError as exc:
             failed.append(BulkFailure(id=task.id, reason=exc.detail))
             continue

@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: Template Dashboard API
+  title: Template API
   version: 0.1.0
   description: >-
     Contract-first API for the authenticated dashboard template. This spec is
@@ -110,6 +110,15 @@ paths:
       operationId: listUsers
       summary: List all users
       parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Case-insensitive substring match on the user's name or email.
+        - name: role
+          in: query
+          schema:
+            $ref: "#/components/schemas/Role"
         - name: _start
           in: query
           schema:
@@ -119,13 +128,24 @@ paths:
           in: query
           schema:
             type: integer
-          description: Exclusive upper bound on the result slice. When omitted, all matching users after `_start` are returned.
+          description: "Exclusive upper bound on the result slice. When omitted, all matching users after `_start` are returned."
+        - name: _sort
+          in: query
+          schema:
+            type: string
+          description: "Field to sort by: `name`, `email`, `role`, or `createdAt`. Defaults to `name`."
+        - name: _order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+          description: "Sort direction. Defaults to `asc`."
       responses:
         "200":
           description: List of users.
           headers:
             x-total-count:
-              description: Total number of users before pagination.
+              description: Total number of users matching the filters before pagination.
               schema:
                 type: integer
           content:
@@ -594,7 +614,7 @@ components:
     TaskBulkUpdateRequest:
       type: object
       required: [ids]
-      description: At least one of status, priority, or assigneeId must be present.
+      description: At least one of status, priority, assigneeId, or dueDate must be present.
       properties:
         ids:
           type: array
@@ -609,6 +629,10 @@ components:
           nullable: true
         assigneeId:
           type: string
+          nullable: true
+        dueDate:
+          type: string
+          format: date
           nullable: true
     TaskBulkUpdateResponse:
       type: object
