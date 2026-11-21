@@ -15,6 +15,7 @@ tags:
   - name: roles
   - name: dashboard
   - name: password
+  - name: events
 
 paths:
   /auth/register:
@@ -105,6 +106,48 @@ paths:
           description: Logged out.
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /events:
+    get:
+      tags: [events]
+      operationId: streamEvents
+      summary: Subscribe to live invalidation events
+      description: >-
+        Streams Server-Sent Events on the requested channel. Each `live` event
+        carries the ids of the Tasks that changed; clients treat it as an
+        invalidation signal and refetch the authoritative data. The access token
+        travels as a query parameter because `EventSource` cannot set an
+        `Authorization` header.
+      security: []
+      parameters:
+        - name: channel
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [resources/tasks]
+          description: The resource channel to subscribe to.
+        - name: access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: A valid access token (JWT).
+      responses:
+        "200":
+          description: An open event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: The channel is unknown or a query value is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /users:
     get:

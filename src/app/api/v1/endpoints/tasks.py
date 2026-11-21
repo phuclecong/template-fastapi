@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import FORBIDDEN_DETAIL, get_current_user
 from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
+from app.core.events import publish_task_event
 from app.core.text import escape_like
 from app.core.time import to_utc
 from app.models.task import Priority, Status, Task
@@ -215,6 +216,10 @@ async def create_task(
     )
     db.add(task)
     await db.flush()
+    # Commit before publishing so a connected client that refetches on the event
+    # observes the new task. The request-scoped commit in get_db is then a no-op.
+    await db.commit()
+    publish_task_event("created", [task.id])
     return task
 
 
@@ -230,6 +235,7 @@ async def bulk_update_tasks(
     in ``failed`` with a reason (not found, forbidden, or an invalid status transition).
     """
     updated = 0
+    updated_ids: list[str] = []
     failed: list[BulkFailure] = []
     updatable: list[Task] = []
     seen: set[str] = set()
@@ -271,8 +277,11 @@ async def bulk_update_tasks(
             continue
 
         updated += 1
+        updated_ids.append(task.id)
 
     await db.flush()
+    await db.commit()
+    publish_task_event("updated", updated_ids)
     return TaskBulkUpdateResponse(updated=updated, failed=failed)
 
 
@@ -316,6 +325,8 @@ async def update_task(
         _apply_status_transition(task, payload.status)
 
     await db.flush()
+    await db.commit()
+    publish_task_event("updated", [task.id])
     return task
 
 
@@ -331,4 +342,6 @@ async def delete_task(
     _ensure_assignee_or_admin(task, current_user)
 
     await db.delete(task)
+    await db.commit()
+    publish_task_event("deleted", [id])
     return Response(status_code=204)
