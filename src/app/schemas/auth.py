@@ -45,7 +45,8 @@ class AuthResponse(BaseModel):
 
 
 class RefreshResponse(BaseModel):
-    """A rotated access + refresh token pair."""
+    """A rotated access + refresh token pair, plus the current user."""
 
     accessToken: str
     refreshToken: str
+    user: User

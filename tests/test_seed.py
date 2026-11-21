@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import (
 import app.models as _models  # noqa: F401  # ensure models register with Base.metadata
 from app.core.config import Settings
 from app.core.database import Base
-from app.core.seed import seed_admin
+from app.core.seed import seed_admin, seed_system_roles
+from app.models.role import ADMIN_ROLE_ID, MEMBER_ROLE_ID, Role
 from app.models.user import User
 
 
@@ -54,8 +55,24 @@ async def test_seed_creates_admin_from_env(tmp_path: Path) -> None:
     assert user is not None
     assert user.name == "Root Admin"
     assert user.email == "admin@example.com"
-    assert user.role == "admin"
+    assert user.role_id == ADMIN_ROLE_ID
     PasswordHasher().verify(user.hashed_password, "admin-password-123")  # raises on mismatch
+
+    await engine.dispose()
+
+
+async def test_seed_system_roles_is_idempotent(tmp_path: Path) -> None:
+    factory, engine = await _build_db(tmp_path, "seed.db")
+
+    await seed_system_roles(factory)
+    await seed_system_roles(factory)
+
+    async with factory() as db:
+        roles = list((await db.scalars(select(Role).order_by(Role.id))).all())
+
+    assert [role.id for role in roles] == [ADMIN_ROLE_ID, MEMBER_ROLE_ID]
+    assert [role.title for role in roles] == ["Administrator", "Member"]
+    assert {role.status for role in roles} == {"active"}
 
     await engine.dispose()
 

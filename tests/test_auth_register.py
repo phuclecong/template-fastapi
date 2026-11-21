@@ -6,8 +6,7 @@ import jwt
 from httpx import AsyncClient
 
 from app.core.config import get_settings
-
-_DEFAULT_PASSWORD = "correct horse battery staple"
+from tests.helpers import PASSWORD as _DEFAULT_PASSWORD
 
 
 def _register(
@@ -31,10 +30,11 @@ async def test_register_returns_201_with_tokens_and_member_user(client: AsyncCli
     assert set(body) == {"accessToken", "refreshToken", "user"}
 
     user = body["user"]
-    assert set(user) == {"id", "name", "email", "role", "createdAt"}
+    assert set(user) == {"id", "name", "email", "roleId", "role", "createdAt"}
     assert user["name"] == "Ada Lovelace"
     assert user["email"] == "ada@example.com"
-    assert user["role"] == "member"
+    assert user["roleId"] == "rol_member"
+    assert user["role"] == {"id": "rol_member", "title": "Member", "status": "active"}
     assert user["id"]
 
     assert body["accessToken"]
@@ -66,9 +66,10 @@ async def test_duplicate_email_is_case_insensitive_409(client: AsyncClient) -> N
 
     assert second.status_code == 409
     body = second.json()
-    assert set(body) == {"type", "title", "status", "detail", "code"}
+    assert set(body) == {"type", "title", "status", "detail", "code", "message"}
     assert body["status"] == 409
     assert body["code"] == "conflict"
+    assert body["message"] == body["detail"]
 
 
 async def test_password_must_be_at_least_8_characters(client: AsyncClient) -> None:

@@ -1,18 +1,14 @@
 """Task list tests: GET /tasks with filtering, sorting, and pagination."""
 
-from datetime import date
+from datetime import UTC, datetime
 from typing import Any
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.task import Priority, Status, Task
-
-_PASSWORD = "correct horse battery staple"
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from tests.helpers import PASSWORD as _PASSWORD
+from tests.helpers import auth as _auth
 
 
 async def _token_and_user(
@@ -41,7 +37,7 @@ async def _seed_task(
     status: str = Status.TODO.value,
     priority: str | None = None,
     assignee_id: str | None = None,
-    due_date: date | None = None,
+    due_date: datetime | None = None,
 ) -> str:
     """Insert a task directly; the only way to seed a ``done`` task (no HTTP birth path)."""
     task = Task(
@@ -95,6 +91,23 @@ async def test_list_filters_by_status(client: AsyncClient) -> None:
     assert [task["title"] for task in response.json()] == ["Doing task"]
 
 
+async def test_list_filters_by_multiple_statuses(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+    await _create(client, token=token, json={"title": "Todo task"})
+    await _create(client, token=token, json={"title": "Doing task", "status": "in-progress"})
+    await _create(client, token=token, json={"title": "Blocked task", "status": "blocked"})
+
+    response = await client.get(
+        "/api/v1/tasks",
+        params=[("status", "todo"), ("status", "in-progress")],
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-total-count"] == "2"
+    assert {task["title"] for task in response.json()} == {"Todo task", "Doing task"}
+
+
 async def test_list_filters_by_priority(client: AsyncClient) -> None:
     token, _ = await _token_and_user(client)
     await _create(client, token=token, json={"title": "Urgent", "priority": "high"})
@@ -105,6 +118,23 @@ async def test_list_filters_by_priority(client: AsyncClient) -> None:
     assert response.status_code == 200
     assert response.headers["x-total-count"] == "1"
     assert [task["title"] for task in response.json()] == ["Urgent"]
+
+
+async def test_list_filters_by_multiple_priorities(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+    await _create(client, token=token, json={"title": "Urgent", "priority": "high"})
+    await _create(client, token=token, json={"title": "Calm", "priority": "low"})
+    await _create(client, token=token, json={"title": "Medium", "priority": "medium"})
+
+    response = await client.get(
+        "/api/v1/tasks",
+        params=[("priority", "high"), ("priority", "medium")],
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-total-count"] == "2"
+    assert {task["title"] for task in response.json()} == {"Urgent", "Medium"}
 
 
 async def test_list_filters_by_assignee(client: AsyncClient) -> None:
@@ -127,22 +157,131 @@ async def test_list_filters_by_assignee(client: AsyncClient) -> None:
     assert [task["title"] for task in unassigned.json()] == ["Free"]
 
 
+async def test_list_filters_by_multiple_assignees_and_unassigned(client: AsyncClient) -> None:
+    token, creator_id = await _token_and_user(client)
+    _, assignee_id = await _token_and_user(client, email="assignee@example.com", name="Assignee")
+    await _create(client, token=token, json={"title": "Assigned", "assigneeId": assignee_id})
+    await _create(client, token=token, json={"title": "Mine", "assigneeId": creator_id})
+    await _create(client, token=token, json={"title": "Free"})
+
+    response = await client.get(
+        "/api/v1/tasks",
+        params=[("assigneeId", assignee_id), ("assigneeId", "unassigned")],
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-total-count"] == "2"
+    assert {task["title"] for task in response.json()} == {"Assigned", "Free"}
+
+
+async def test_list_rejects_unknown_assignee(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+    await _create(client, token=token, json={"title": "A task"})
+
+    response = await client.get(
+        "/api/v1/tasks",
+        params={"assigneeId": "00000000-0000-0000-0000-000000000000"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_list_combines_filters_with_and(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+    await _create(
+        client, token=token, json={"title": "Match A", "status": "in-progress", "priority": "high"}
+    )
+    await _create(
+        client, token=token, json={"title": "Match B", "status": "in-progress", "priority": "high"}
+    )
+    await _create(client, token=token, json={"title": "Wrong status", "priority": "high"})
+    await _create(
+        client,
+        token=token,
+        json={"title": "Wrong priority", "status": "in-progress", "priority": "low"},
+    )
+
+    response = await client.get(
+        "/api/v1/tasks",
+        params={"status": "in-progress", "priority": "high"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-total-count"] == "2"
+    assert {task["title"] for task in response.json()} == {"Match A", "Match B"}
+
+
+async def test_list_ignores_empty_filter_repeats(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+    await _create(client, token=token, json={"title": "Todo task"})
+    await _create(client, token=token, json={"title": "Urgent", "priority": "high"})
+    await _create(client, token=token, json={"title": "Free"})
+
+    response = await client.get(
+        "/api/v1/tasks",
+        params=[("status", ""), ("priority", ""), ("assigneeId", "")],
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-total-count"] == "3"
+
+
 async def test_list_filters_by_due_date_range(client: AsyncClient) -> None:
     token, _ = await _token_and_user(client)
-    await _create(client, token=token, json={"title": "Early", "dueDate": "2026-01-01"})
-    await _create(client, token=token, json={"title": "Mid", "dueDate": "2026-06-01"})
-    await _create(client, token=token, json={"title": "Late", "dueDate": "2026-12-31"})
+    await _create(
+        client, token=token, json={"title": "Early", "dueDate": "2026-01-01T09:00:00+00:00"}
+    )
+    await _create(
+        client, token=token, json={"title": "Mid", "dueDate": "2026-06-15T12:00:00+00:00"}
+    )
+    await _create(
+        client, token=token, json={"title": "Late", "dueDate": "2026-12-31T23:59:59+00:00"}
+    )
     await _create(client, token=token, json={"title": "No date"})
 
     response = await client.get(
         "/api/v1/tasks",
-        params={"dueDate_gte": "2026-06-01", "dueDate_lte": "2026-12-31"},
+        params={
+            "dueDate_gte": "2026-06-15T12:00:00+00:00",
+            "dueDate_lte": "2026-12-31T23:59:59+00:00",
+        },
         headers=_auth(token),
     )
 
     assert response.status_code == 200
     assert response.headers["x-total-count"] == "2"
     assert {task["title"] for task in response.json()} == {"Mid", "Late"}
+
+
+async def test_list_rejects_date_only_due_date_bounds(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+
+    for field in ("dueDate_gte", "dueDate_lte"):
+        response = await client.get(
+            "/api/v1/tasks", params={field: "2026-06-15"}, headers=_auth(token)
+        )
+
+        assert response.status_code == 422
+        assert response.json()["code"] == "validation_error"
+
+
+async def test_list_rejects_offset_less_due_date_bounds(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+
+    for field in ("dueDate_gte", "dueDate_lte"):
+        response = await client.get(
+            "/api/v1/tasks",
+            params={field: "2026-06-15T12:00:00"},
+            headers=_auth(token),
+        )
+
+        assert response.status_code == 422
+        assert response.json()["code"] == "validation_error"
 
 
 async def test_list_paginates_with_start_and_end(client: AsyncClient) -> None:
@@ -215,15 +354,37 @@ async def test_list_sorts_by_due_date(
 ) -> None:
     token, _ = await _token_and_user(client)
     for title, due in (
-        ("Third", date(2026, 12, 31)),
-        ("First", date(2026, 1, 1)),
-        ("Second", date(2026, 6, 1)),
+        ("Third", datetime(2026, 12, 31, tzinfo=UTC)),
+        ("First", datetime(2026, 1, 1, tzinfo=UTC)),
+        ("Second", datetime(2026, 6, 1, tzinfo=UTC)),
     ):
         await _seed_task(session_factory, title=title, due_date=due)
 
     response = await client.get("/api/v1/tasks", params={"_sort": "dueDate"}, headers=_auth(token))
 
     assert [task["title"] for task in response.json()] == ["First", "Second", "Third"]
+
+
+async def test_list_sorts_due_dates_with_nulls_last_in_both_directions(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    token, _ = await _token_and_user(client)
+    for title, due in (
+        ("Undated", None),
+        ("Later", datetime(2026, 12, 31, tzinfo=UTC)),
+        ("Earlier", datetime(2026, 1, 1, tzinfo=UTC)),
+    ):
+        await _seed_task(session_factory, title=title, due_date=due)
+
+    ascending = await client.get("/api/v1/tasks", params={"_sort": "dueDate"}, headers=_auth(token))
+    descending = await client.get(
+        "/api/v1/tasks",
+        params={"_sort": "dueDate", "_order": "desc"},
+        headers=_auth(token),
+    )
+
+    assert [task["title"] for task in ascending.json()] == ["Earlier", "Later", "Undated"]
+    assert [task["title"] for task in descending.json()] == ["Later", "Earlier", "Undated"]
 
 
 async def test_list_combines_filters_with_pagination(client: AsyncClient) -> None:
@@ -266,6 +427,17 @@ async def test_list_rejects_invalid_status(client: AsyncClient) -> None:
     token, _ = await _token_and_user(client)
 
     response = await client.get("/api/v1/tasks", params={"status": "bogus"}, headers=_auth(token))
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_list_rejects_invalid_priority(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+
+    response = await client.get(
+        "/api/v1/tasks", params={"priority": "urgent"}, headers=_auth(token)
+    )
 
     assert response.status_code == 422
     assert response.json()["code"] == "validation_error"

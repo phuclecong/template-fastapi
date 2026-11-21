@@ -12,8 +12,9 @@ from app.api.v1.dependencies import get_current_session_id, get_current_user
 from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
 from app.core.security import hash_password, verify_password
+from app.core.time import utcnow
 from app.models.session import Session
-from app.models.user import User, utcnow
+from app.models.user import User
 from app.schemas.auth import PasswordUpdateRequest
 
 router = APIRouter(tags=["password"])
@@ -21,7 +22,7 @@ router = APIRouter(tags=["password"])
 _WRONG_CURRENT_PASSWORD_DETAIL = "Current password is incorrect."
 
 
-@router.put("/password", status_code=204)
+@router.put("/password", status_code=204, operation_id="updatePassword")
 async def update_password(
     payload: PasswordUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],

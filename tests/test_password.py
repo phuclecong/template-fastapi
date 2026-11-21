@@ -4,12 +4,10 @@ from typing import Any
 
 from httpx import AsyncClient
 
+from tests.helpers import auth as _auth
+
 _OLD_PASSWORD = "correct horse battery staple"
 _NEW_PASSWORD = "brand new secret phrase"
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _register(

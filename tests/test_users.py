@@ -1,18 +1,17 @@
 """Users endpoint tests: GET /users, GET /users/me, PATCH /users/{id}/role, DELETE /users/{id}."""
 
+from datetime import UTC, datetime
 from typing import Any
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.security import hash_password
-from app.models.user import Role, User
-
-_PASSWORD = "correct horse battery staple"
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from app.models.role import ADMIN_ROLE_ID, MEMBER_ROLE_ID, Role
+from app.models.user import User
+from tests.helpers import PASSWORD as _PASSWORD
+from tests.helpers import auth as _auth
+from tests.helpers import create_admin as _create_admin
 
 
 def _register(
@@ -42,30 +41,23 @@ async def _create_user(
     *,
     name: str,
     email: str,
-    role: Role,
+    role_id: str,
     password: str = _PASSWORD,
+    created_at: datetime | None = None,
 ) -> str:
-    """Insert a user directly; the only way to seed an ``admin`` (members go via /register)."""
+    """Insert a user directly; the only way to seed an Administrator (members register)."""
     user = User(
         name=name,
         email=email,
         hashed_password=hash_password(password),
-        role=role.value,
+        role_id=role_id,
     )
+    if created_at is not None:
+        user.created_at = created_at
     async with factory() as db:
         db.add(user)
         await db.commit()
         return user.id
-
-
-async def _create_admin(
-    factory: async_sessionmaker[AsyncSession],
-    *,
-    name: str = "Admin",
-    email: str = "admin@example.com",
-) -> str:
-    """Insert an admin directly (admins are born via seed, not /register)."""
-    return await _create_user(factory, name=name, email=email, role=Role.ADMIN)
 
 
 def _create_task(
@@ -119,7 +111,8 @@ async def test_list_users_returns_all_with_total_count(
         "grace@example.com",
     }
     for user in users:
-        assert set(user) == {"id", "name", "email", "role", "createdAt"}
+        assert set(user) == {"id", "name", "email", "roleId", "role", "createdAt"}
+        assert set(user["role"]) == {"id", "title", "status"}
 
 
 async def test_list_users_paginates_with_start_and_end(
@@ -166,7 +159,7 @@ async def test_list_users_filters_by_q_on_name_and_email(
     assert [user["email"] for user in by_email.json()] == ["admin@example.com"]
 
 
-async def test_list_users_filters_by_role(
+async def test_list_users_filters_by_role_id(
     client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     await _create_admin(session_factory)
@@ -174,10 +167,10 @@ async def test_list_users_filters_by_role(
     member_token = (await _login(client, email="ada@example.com")).json()["accessToken"]
 
     admins = await client.get(
-        "/api/v1/users", params={"role": "admin"}, headers=_auth(member_token)
+        "/api/v1/users", params={"roleId": ADMIN_ROLE_ID}, headers=_auth(member_token)
     )
     members = await client.get(
-        "/api/v1/users", params={"role": "member"}, headers=_auth(member_token)
+        "/api/v1/users", params={"roleId": MEMBER_ROLE_ID}, headers=_auth(member_token)
     )
 
     assert admins.status_code == 200
@@ -205,7 +198,7 @@ async def test_list_users_sorts_by_name_desc(
     assert [user["name"] for user in response.json()] == ["Grace Hopper", "Admin", "Ada Lovelace"]
 
 
-async def test_list_users_sorts_by_role(
+async def test_list_users_sorts_by_role_id(
     client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     await _create_admin(session_factory, name="Zed Admin", email="zadmin@example.com")
@@ -214,10 +207,109 @@ async def test_list_users_sorts_by_role(
     member_token = (await _login(client, email="amember@example.com")).json()["accessToken"]
 
     response = await client.get(
-        "/api/v1/users", params={"_sort": "role"}, headers=_auth(member_token)
+        "/api/v1/users", params={"_sort": "roleId"}, headers=_auth(member_token)
     )
 
-    assert [user["role"] for user in response.json()] == ["admin", "member", "member"]
+    assert [user["roleId"] for user in response.json()] == [
+        ADMIN_ROLE_ID,
+        MEMBER_ROLE_ID,
+        MEMBER_ROLE_ID,
+    ]
+
+
+async def test_list_users_sorts_by_email(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory, name="Zed Admin", email="aaron@example.com")
+    await _register(client, name="Ada Lovelace", email="zulu@example.com")
+    await _register(client, name="Mona Lisa", email="mike@example.com")
+    member_token = (await _login(client, email="zulu@example.com")).json()["accessToken"]
+
+    ascending = await client.get(
+        "/api/v1/users", params={"_sort": "email"}, headers=_auth(member_token)
+    )
+    descending = await client.get(
+        "/api/v1/users",
+        params={"_sort": "email", "_order": "desc"},
+        headers=_auth(member_token),
+    )
+
+    assert [user["email"] for user in ascending.json()] == [
+        "aaron@example.com",
+        "mike@example.com",
+        "zulu@example.com",
+    ]
+    assert [user["email"] for user in descending.json()] == [
+        "zulu@example.com",
+        "mike@example.com",
+        "aaron@example.com",
+    ]
+
+
+async def test_list_users_sorts_by_created_at(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_user(
+        session_factory,
+        name="Oldest",
+        email="oldest@example.com",
+        role_id=ADMIN_ROLE_ID,
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    await _create_user(
+        session_factory,
+        name="Newest",
+        email="newest@example.com",
+        role_id=MEMBER_ROLE_ID,
+        created_at=datetime(2024, 3, 1, tzinfo=UTC),
+    )
+    await _create_user(
+        session_factory,
+        name="Middle",
+        email="middle@example.com",
+        role_id=MEMBER_ROLE_ID,
+        created_at=datetime(2024, 2, 1, tzinfo=UTC),
+    )
+    token = (await _login(client, email="middle@example.com")).json()["accessToken"]
+
+    ascending = await client.get(
+        "/api/v1/users", params={"_sort": "createdAt"}, headers=_auth(token)
+    )
+    descending = await client.get(
+        "/api/v1/users",
+        params={"_sort": "createdAt", "_order": "desc"},
+        headers=_auth(token),
+    )
+
+    assert [user["email"] for user in ascending.json()] == [
+        "oldest@example.com",
+        "middle@example.com",
+        "newest@example.com",
+    ]
+    assert [user["email"] for user in descending.json()] == [
+        "newest@example.com",
+        "middle@example.com",
+        "oldest@example.com",
+    ]
+
+
+async def test_list_users_role_id_filter_is_exact(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    member = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    member_id = member.json()["user"]["id"]
+    token = member.json()["accessToken"]
+
+    partial = await client.get("/api/v1/users", params={"roleId": "rol_adm"}, headers=_auth(token))
+    exact = await client.get(
+        "/api/v1/users", params={"roleId": MEMBER_ROLE_ID}, headers=_auth(token)
+    )
+
+    assert partial.status_code == 200
+    assert partial.json() == []
+    assert exact.status_code == 200
+    assert [user["id"] for user in exact.json()] == [member_id]
 
 
 async def test_list_users_total_count_reflects_filters(
@@ -261,16 +353,17 @@ async def test_list_users_rejects_invalid_order(client: AsyncClient) -> None:
     assert response.json()["code"] == "validation_error"
 
 
-async def test_list_users_rejects_invalid_role(client: AsyncClient) -> None:
+async def test_list_users_filters_by_unknown_role_id_returns_empty(client: AsyncClient) -> None:
     registered = await _register(client, name="Ada Lovelace", email="ada@example.com")
     token = registered.json()["accessToken"]
 
     response = await client.get(
-        "/api/v1/users", params={"role": "superadmin"}, headers=_auth(token)
+        "/api/v1/users", params={"roleId": "rol_missing"}, headers=_auth(token)
     )
 
-    assert response.status_code == 422
-    assert response.json()["code"] == "validation_error"
+    assert response.status_code == 200
+    assert response.headers["x-total-count"] == "0"
+    assert response.json() == []
 
 
 async def test_list_users_without_token_returns_401(client: AsyncClient) -> None:
@@ -290,14 +383,65 @@ async def test_admin_promotes_member(
 
     response = await client.patch(
         f"/api/v1/users/{member_id}/role",
-        json={"role": "admin"},
+        json={"roleId": ADMIN_ROLE_ID},
         headers=_auth(admin_token),
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == member_id
-    assert body["role"] == "admin"
+    assert body["roleId"] == ADMIN_ROLE_ID
+    assert body["role"] == {
+        "id": ADMIN_ROLE_ID,
+        "title": "Administrator",
+        "status": "active",
+    }
+
+
+async def test_admin_assigns_custom_active_role(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    member = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    member_id = member.json()["user"]["id"]
+    admin_token = (await _login(client, email="admin@example.com")).json()["accessToken"]
+    async with session_factory() as db:
+        db.add(Role(id="rol_engineer", title="Engineer", description=None, status="active"))
+        await db.commit()
+
+    response = await client.patch(
+        f"/api/v1/users/{member_id}/role",
+        json={"roleId": "rol_engineer"},
+        headers=_auth(admin_token),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["roleId"] == "rol_engineer"
+    assert body["role"] == {"id": "rol_engineer", "title": "Engineer", "status": "active"}
+
+    filtered = await client.get(
+        "/api/v1/users", params={"roleId": "rol_engineer"}, headers=_auth(admin_token)
+    )
+    assert [user["id"] for user in filtered.json()] == [member_id]
+
+
+async def test_update_role_without_role_id_returns_422(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    member = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    member_id = member.json()["user"]["id"]
+    admin_token = (await _login(client, email="admin@example.com")).json()["accessToken"]
+
+    response = await client.patch(
+        f"/api/v1/users/{member_id}/role",
+        json={},
+        headers=_auth(admin_token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
 
 
 async def test_member_cannot_change_role(
@@ -309,7 +453,7 @@ async def test_member_cannot_change_role(
 
     response = await client.patch(
         f"/api/v1/users/{admin_id}/role",
-        json={"role": "member"},
+        json={"roleId": MEMBER_ROLE_ID},
         headers=_auth(member_token),
     )
 
@@ -325,7 +469,7 @@ async def test_demoting_last_admin_is_blocked(
 
     response = await client.patch(
         f"/api/v1/users/{admin_id}/role",
-        json={"role": "member"},
+        json={"roleId": MEMBER_ROLE_ID},
         headers=_auth(admin_token),
     )
 
@@ -342,12 +486,12 @@ async def test_admin_can_be_demoted_when_another_admin_exists(
 
     response = await client.patch(
         f"/api/v1/users/{admin2_id}/role",
-        json={"role": "member"},
+        json={"roleId": MEMBER_ROLE_ID},
         headers=_auth(admin1_token),
     )
 
     assert response.status_code == 200
-    assert response.json()["role"] == "member"
+    assert response.json()["roleId"] == MEMBER_ROLE_ID
 
 
 async def test_update_role_unknown_user_returns_404(
@@ -358,7 +502,7 @@ async def test_update_role_unknown_user_returns_404(
 
     response = await client.patch(
         "/api/v1/users/00000000-0000-0000-0000-000000000000/role",
-        json={"role": "admin"},
+        json={"roleId": ADMIN_ROLE_ID},
         headers=_auth(admin_token),
     )
 
@@ -369,14 +513,14 @@ async def test_update_role_unknown_user_returns_404(
 async def test_update_role_without_token_returns_401(client: AsyncClient) -> None:
     response = await client.patch(
         "/api/v1/users/some-id/role",
-        json={"role": "admin"},
+        json={"roleId": ADMIN_ROLE_ID},
     )
 
     assert response.status_code == 401
     assert response.json()["code"] == "unauthorized"
 
 
-async def test_update_role_invalid_role_returns_422(
+async def test_update_role_unknown_role_returns_400(
     client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     await _create_admin(session_factory)
@@ -386,12 +530,87 @@ async def test_update_role_invalid_role_returns_422(
 
     response = await client.patch(
         f"/api/v1/users/{member_id}/role",
-        json={"role": "superadmin"},
+        json={"roleId": "rol_missing"},
         headers=_auth(admin_token),
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert response.json()["code"] == "validation_error"
+
+
+async def test_update_role_inactive_role_returns_400(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_admin(session_factory)
+    member = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    member_id = member.json()["user"]["id"]
+    admin_token = (await _login(client, email="admin@example.com")).json()["accessToken"]
+    async with session_factory() as db:
+        db.add(
+            Role(
+                id="rol_retired",
+                title="Retired",
+                description=None,
+                status="inactive",
+            )
+        )
+        await db.commit()
+
+    response = await client.patch(
+        f"/api/v1/users/{member_id}/role",
+        json={"roleId": "rol_retired"},
+        headers=_auth(admin_token),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_missing_role_row_degrades_user_response(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await _create_user(
+        session_factory,
+        name="Ghost",
+        email="ghost@example.com",
+        role_id="rol_ghost",
+    )
+
+    response = await _login(client, email="ghost@example.com")
+
+    assert response.status_code == 200
+    user = response.json()["user"]
+    assert user["roleId"] == "rol_ghost"
+    assert user["role"] == {"id": "rol_ghost", "title": "rol_ghost", "status": "active"}
+
+
+async def test_role_title_and_status_change_reflect_in_next_user_response(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    registered = await _register(client, name="Ada Lovelace", email="ada@example.com")
+    token = registered.json()["accessToken"]
+
+    async with session_factory() as db:
+        role = await db.get(Role, MEMBER_ROLE_ID)
+        assert role is not None
+        role.title = "Associate"
+        role.status = "inactive"
+        await db.commit()
+
+    response = await client.get("/api/v1/users/me", headers=_auth(token))
+    listed = await client.get(
+        "/api/v1/users", params={"q": "ada@example.com"}, headers=_auth(token)
+    )
+
+    expected_role = {
+        "id": MEMBER_ROLE_ID,
+        "title": "Associate",
+        "status": "inactive",
+    }
+    assert response.status_code == 200
+    assert response.json()["role"] == expected_role
+    assert listed.status_code == 200
+    assert listed.json()[0]["role"] == expected_role
 
 
 async def test_admin_deletes_member_and_unassigns_their_tasks(

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 import app.models as _models  # noqa: F401  # ensure models register with Base.metadata
 from app.core.database import Base, get_db
 from app.core.ratelimit import reset_auth_rate_limiter
+from app.core.seed import seed_system_roles
 from app.main import app
 
 
@@ -33,6 +34,7 @@ async def session_factory(tmp_path: Path) -> AsyncIterator[async_sessionmaker[As
         await connection.run_sync(Base.metadata.create_all)
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    await seed_system_roles(factory)
     yield factory
     await engine.dispose()
 
