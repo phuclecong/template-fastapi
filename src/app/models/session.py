@@ -9,7 +9,7 @@ from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.models.user import utcnow
+from app.core.time import utcnow
 
 
 class Session(Base):

@@ -11,3 +11,5 @@ class ProblemDetail(BaseModel):
     status: int
     detail: str
     code: str
+    # Additive human-readable alias for ``detail`` used by the web client.
+    message: str

@@ -97,6 +97,7 @@ def build_problem_detail(
         status=status_code,
         detail=detail,
         code=code.value,
+        message=detail,
     ).model_dump()
 
 

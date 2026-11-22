@@ -14,8 +14,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.models as _models  # noqa: F401  # ensure models register with Base.metadata
-from app.core.database import Base, get_db
+from app.core.database import Base, get_db, get_session_factory
 from app.core.ratelimit import reset_auth_rate_limiter
+from app.core.seed import seed_system_roles
 from app.main import app
 
 
@@ -33,6 +34,7 @@ async def session_factory(tmp_path: Path) -> AsyncIterator[async_sessionmaker[As
         await connection.run_sync(Base.metadata.create_all)
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    await seed_system_roles(factory)
     yield factory
     await engine.dispose()
 
@@ -53,6 +55,7 @@ async def client(
                 raise
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_session_factory] = lambda: session_factory
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as test_client:
         yield test_client

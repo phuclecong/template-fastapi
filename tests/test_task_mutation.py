@@ -2,17 +2,19 @@
 
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.security import hash_password
-from app.models.user import Role, User
-
-_PASSWORD = "correct horse battery staple"
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from tests.helpers import (
+    PASSWORD as _PASSWORD,
+)
+from tests.helpers import (
+    auth as _auth,
+)
+from tests.helpers import (
+    create_admin as _create_admin,
+)
 
 
 async def _register(
@@ -34,24 +36,6 @@ async def _login(client: AsyncClient, *, email: str) -> str:
         json={"email": email, "password": _PASSWORD},
     )
     return response.json()["accessToken"]
-
-
-async def _create_admin(
-    factory: async_sessionmaker[AsyncSession],
-    *,
-    email: str = "admin@example.com",
-) -> str:
-    """Seed an admin directly (admins are born via seed, not /register)."""
-    user = User(
-        name="Admin",
-        email=email,
-        hashed_password=hash_password(_PASSWORD),
-        role=Role.ADMIN.value,
-    )
-    async with factory() as db:
-        db.add(user)
-        await db.commit()
-        return user.id
 
 
 async def _create_task(
@@ -130,7 +114,7 @@ async def test_omitted_fields_are_unchanged(client: AsyncClient) -> None:
         assignee_id=member["user"]["id"],
         description="Keep me",
         priority="high",
-        dueDate="2026-12-31",
+        dueDate="2026-12-31T10:30:00+00:00",
     )
 
     response = await _patch(client, token=token, task_id=task["id"], json={"title": "New title"})
@@ -141,7 +125,7 @@ async def test_omitted_fields_are_unchanged(client: AsyncClient) -> None:
     assert body["description"] == "Keep me"
     assert body["priority"] == "high"
     assert body["assigneeId"] == member["user"]["id"]
-    assert body["dueDate"] == "2026-12-31"
+    assert body["dueDate"] == "2026-12-31T10:30:00Z"
 
 
 async def test_explicit_null_clears_optional_fields(client: AsyncClient) -> None:
@@ -153,7 +137,7 @@ async def test_explicit_null_clears_optional_fields(client: AsyncClient) -> None
         assignee_id=member["user"]["id"],
         description="Clear me",
         priority="medium",
-        dueDate="2026-12-31",
+        dueDate="2026-12-31T10:30:00+00:00",
     )
 
     response = await _patch(
@@ -169,6 +153,34 @@ async def test_explicit_null_clears_optional_fields(client: AsyncClient) -> None
     assert body["priority"] is None
     assert body["assigneeId"] is None
     assert body["dueDate"] is None
+
+
+async def test_patch_normalizes_due_date_offset_to_utc(client: AsyncClient) -> None:
+    member = await _register(client, email="ada@example.com")
+    token = member["accessToken"]
+    task = await _create_task(client, token=token, assignee_id=member["user"]["id"])
+
+    response = await _patch(
+        client,
+        token=token,
+        task_id=task["id"],
+        json={"dueDate": "2026-12-31T18:30:00+05:30"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dueDate"] == "2026-12-31T13:00:00Z"
+
+
+@pytest.mark.parametrize("due_date", ["2026-12-31", "2026-12-31T10:30:00"])
+async def test_patch_rejects_non_instant_due_date(client: AsyncClient, due_date: str) -> None:
+    member = await _register(client, email="ada@example.com")
+    token = member["accessToken"]
+    task = await _create_task(client, token=token, assignee_id=member["user"]["id"])
+
+    response = await _patch(client, token=token, task_id=task["id"], json={"dueDate": due_date})
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
 
 
 async def test_patch_null_title_is_rejected(client: AsyncClient) -> None:

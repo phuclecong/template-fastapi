@@ -5,11 +5,8 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 
-_PASSWORD = "correct horse battery staple"
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from tests.helpers import PASSWORD as _PASSWORD
+from tests.helpers import auth as _auth
 
 
 async def _token_and_user(
@@ -78,7 +75,7 @@ async def test_create_task_accepts_optional_fields(client: AsyncClient) -> None:
             "status": "in-progress",
             "priority": "high",
             "assigneeId": assignee_id,
-            "dueDate": "2026-12-31",
+            "dueDate": "2026-12-31T10:30:00+00:00",
         },
     )
 
@@ -88,7 +85,33 @@ async def test_create_task_accepts_optional_fields(client: AsyncClient) -> None:
     assert task["status"] == "in-progress"
     assert task["priority"] == "high"
     assert task["assigneeId"] == assignee_id
-    assert task["dueDate"] == "2026-12-31"
+    assert task["dueDate"] == "2026-12-31T10:30:00Z"
+
+
+async def test_create_task_normalizes_due_date_offset_to_utc(client: AsyncClient) -> None:
+    token, _ = await _token_and_user(client)
+
+    response = await _create(
+        client,
+        token=token,
+        json={"title": "Overnight", "dueDate": "2026-12-31T18:30:00+05:30"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["dueDate"] == "2026-12-31T13:00:00Z"
+
+
+@pytest.mark.parametrize(
+    "due_date",
+    ["2026-12-31", "2026-12-31T10:30:00"],
+)
+async def test_create_task_rejects_non_instant_due_date(client: AsyncClient, due_date: str) -> None:
+    token, _ = await _token_and_user(client)
+
+    response = await _create(client, token=token, json={"title": "Ambiguous", "dueDate": due_date})
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
 
 
 async def test_create_task_with_done_status_returns_400(client: AsyncClient) -> None:

@@ -13,7 +13,7 @@ from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
 from app.core.ratelimit import SlidingWindowRateLimiter, get_auth_rate_limiter
 from app.core.security import decode_access_token
-from app.models.user import Role, User
+from app.models.user import User
 
 INVALID_ACCESS_TOKEN_DETAIL = "Invalid or expired access token."
 FORBIDDEN_DETAIL = "You do not have permission to perform this action."
@@ -80,7 +80,7 @@ async def get_current_session_id(
 async def get_current_admin(
     user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    """Resolve the authenticated admin, or raise 403."""
-    if user.role != Role.ADMIN.value:
+    """Resolve the authenticated Administrator, or raise 403."""
+    if not user.is_administrator:
         raise ProblemDetailError(403, ErrorCode.FORBIDDEN, FORBIDDEN_DETAIL)
     return user

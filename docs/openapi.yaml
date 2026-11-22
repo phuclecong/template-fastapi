@@ -12,7 +12,10 @@ tags:
   - name: auth
   - name: users
   - name: tasks
+  - name: roles
+  - name: dashboard
   - name: password
+  - name: events
 
 paths:
   /auth/register:
@@ -104,6 +107,48 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /events:
+    get:
+      tags: [events]
+      operationId: streamEvents
+      summary: Subscribe to live invalidation events
+      description: >-
+        Streams Server-Sent Events on the requested channel. Each `live` event
+        carries the ids of the Tasks that changed; clients treat it as an
+        invalidation signal and refetch the authoritative data. The access token
+        travels as a query parameter because `EventSource` cannot set an
+        `Authorization` header.
+      security: []
+      parameters:
+        - name: channel
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [resources/tasks]
+          description: The resource channel to subscribe to.
+        - name: access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: A valid access token (JWT).
+      responses:
+        "200":
+          description: An open event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: The channel is unknown or a query value is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /users:
     get:
       tags: [users]
@@ -115,10 +160,11 @@ paths:
           schema:
             type: string
           description: Case-insensitive substring match on the user's name or email.
-        - name: role
+        - name: roleId
           in: query
           schema:
-            $ref: "#/components/schemas/Role"
+            type: string
+          description: Exact match on the Role identity the User holds.
         - name: _start
           in: query
           schema:
@@ -133,7 +179,7 @@ paths:
           in: query
           schema:
             type: string
-          description: "Field to sort by: `name`, `email`, `role`, or `createdAt`. Defaults to `name`."
+          description: "Field to sort by: `name`, `email`, `roleId`, or `createdAt`. Defaults to `name`."
         - name: _order
           in: query
           schema:
@@ -239,30 +285,52 @@ paths:
           description: Case-insensitive substring match on the title.
         - name: status
           in: query
+          style: form
+          explode: true
           schema:
-            $ref: "#/components/schemas/Status"
+            type: array
+            items:
+              $ref: "#/components/schemas/Status"
+          description: Repeat the parameter to match any of several statuses (OR).
         - name: priority
           in: query
+          style: form
+          explode: true
           schema:
-            type: string
-            enum: [low, medium, high]
+            type: array
+            items:
+              type: string
+              enum: [low, medium, high]
+          description: Repeat the parameter to match any of several priorities (OR).
         - name: assigneeId
           in: query
+          style: form
+          explode: true
           schema:
-            type: string
-          description: A user id, or the literal "unassigned" to match tasks with no assignee.
+            type: array
+            items:
+              type: string
+          description: >-
+            Repeat the parameter to match tasks assigned to any of several
+            users (OR). The literal "unassigned" matches tasks with no
+            assignee and can be combined with user ids.
+
         - name: dueDate_gte
           in: query
           schema:
             type: string
-            format: date
-          description: Inclusive lower bound on the due date.
+            format: date-time
+          description: >-
+            Inclusive lower bound on the due date as an ISO 8601 date-time.
+            Date-only values are rejected.
         - name: dueDate_lte
           in: query
           schema:
             type: string
-            format: date
-          description: Inclusive upper bound on the due date.
+            format: date-time
+          description: >-
+            Inclusive upper bound on the due date as an ISO 8601 date-time.
+            Date-only values are rejected.
         - name: _start
           in: query
           schema:
@@ -418,6 +486,275 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /roles:
+    get:
+      tags: [roles]
+      operationId: listRoles
+      summary: List all roles
+      parameters:
+        - name: title_like
+          in: query
+          schema:
+            type: string
+          description: Case-insensitive substring match on the title.
+        - name: description_like
+          in: query
+          schema:
+            type: string
+          description: Case-insensitive substring match on the description.
+        - name: status
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/RoleStatus"
+          description: Repeat the parameter to match any of several Role statuses (OR).
+        - name: createdAt_gte
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive lower bound on the creation time as an ISO 8601 date-time.
+        - name: createdAt_lte
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive upper bound on the creation time as an ISO 8601 date-time.
+        - name: updatedAt_gte
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive lower bound on the last-updated time as an ISO 8601 date-time.
+        - name: updatedAt_lte
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive upper bound on the last-updated time as an ISO 8601 date-time.
+        - name: _start
+          in: query
+          schema:
+            type: integer
+          description: Number of matching roles to skip before returning results. Defaults to 0.
+        - name: _end
+          in: query
+          schema:
+            type: integer
+          description: "Exclusive upper bound on the result slice. When omitted, all matching roles after `_start` are returned."
+        - name: _sort
+          in: query
+          schema:
+            type: string
+          description: "Field to sort by: `title`, `status`, `createdAt`, or `updatedAt`. Defaults to `title`."
+        - name: _order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+          description: "Sort direction. Defaults to `asc`."
+      responses:
+        "200":
+          description: List of roles.
+          headers:
+            x-total-count:
+              description: Total number of roles matching the filters before pagination.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Role"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [roles]
+      operationId: createRole
+      summary: Create a role (administrators only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoleCreateRequest"
+      responses:
+        "201":
+          description: Created role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /roles/bulk:
+    patch:
+      tags: [roles]
+      operationId: bulkUpdateRoles
+      summary: Update several roles at once (administrators only)
+      description: >-
+        Partial update of `description` and/or `status` on several roles. Titles
+        cannot be bulk edited because they are unique. Per-id failures are
+        reported in the response. System Roles cannot be set to `inactive`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoleBulkUpdateRequest"
+      responses:
+        "200":
+          description: Result of the bulk update; per-id failures are reported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleBulkUpdateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /roles/bulk-delete:
+    post:
+      tags: [roles]
+      operationId: bulkDeleteRoles
+      summary: Delete several roles at once (administrators only)
+      description: >-
+        Deletes several roles. Per-id failures are reported in the response.
+        System Roles and roles held by a User cannot be deleted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoleBulkDeleteRequest"
+      responses:
+        "200":
+          description: Result of the bulk delete; per-id failures are reported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleBulkDeleteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /roles/{id}:
+    get:
+      tags: [roles]
+      operationId: getRole
+      summary: Get a role by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [roles]
+      operationId: updateRole
+      summary: Partially update a role (administrators only)
+      description: >-
+        Only the supplied fields change. `id` and `createdAt` are immutable, and
+        server-managed timestamps cannot be set by the client. A System Role
+        cannot be set to `inactive`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoleUpdateRequest"
+      responses:
+        "200":
+          description: Updated role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags: [roles]
+      operationId: deleteRole
+      summary: Delete a role (administrators only)
+      description: >-
+        A System Role or a Role held by a User cannot be deleted.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /dashboard/summary:
+    get:
+      tags: [dashboard]
+      operationId: getDashboardSummary
+      summary: Get the Task summary the Dashboard renders
+      responses:
+        "200":
+          description: The aggregate Task counts for the authenticated Dashboard.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /password:
     put:
       tags: [password]
@@ -439,9 +776,199 @@ paths:
 
 components:
   schemas:
-    Role:
+    RoleStatus:
       type: string
-      enum: [admin, member]
+      enum: [active, inactive]
+    Role:
+      type: object
+      required: [id, title, description, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/RoleStatus"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    RoleCreateRequest:
+      type: object
+      required: [title]
+      description: "`status` defaults to `active`."
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Trimmed before storage; must be unique case-insensitively.
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Trimmed before storage; a blank value is stored as null.
+        status:
+          $ref: "#/components/schemas/RoleStatus"
+    RoleUpdateRequest:
+      type: object
+      description: >-
+        Only the supplied fields change. `id`, `createdAt`, and `updatedAt` are
+        server-managed and cannot be set.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Trimmed before storage; must be unique case-insensitively.
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Trimmed before storage; a blank value is stored as null.
+        status:
+          $ref: "#/components/schemas/RoleStatus"
+    RoleBulkUpdateRequest:
+      type: object
+      required: [ids]
+      description: >-
+        At least one of description or status must be present. `title` cannot be
+        bulk edited.
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Trimmed before storage; null clears the description.
+        status:
+          $ref: "#/components/schemas/RoleStatus"
+    RoleBulkUpdateResponse:
+      type: object
+      required: [updated, failed]
+      properties:
+        updated:
+          type: integer
+        failed:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoleBulkFailure"
+    RoleBulkDeleteRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+    RoleBulkDeleteResponse:
+      type: object
+      required: [deleted, failed]
+      properties:
+        deleted:
+          type: integer
+        failed:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoleBulkFailure"
+    RoleBulkFailure:
+      type: object
+      required: [id, reason]
+      properties:
+        id:
+          type: string
+        reason:
+          type: string
+          enum: [not_found, system_role, referenced, validation]
+    DashboardTotals:
+      type: object
+      required: [total, open, overdue, completionRate]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        open:
+          type: integer
+          minimum: 0
+          description: Every Task whose status is not `done`.
+        overdue:
+          type: integer
+          minimum: 0
+          description: Tasks with a past Due date whose status is not `done`.
+        completionRate:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: "`done / total`, or 0 when there are no Tasks."
+    DashboardStatusCount:
+      type: object
+      required: [status, count]
+      properties:
+        status:
+          $ref: "#/components/schemas/Status"
+        count:
+          type: integer
+          minimum: 0
+    DashboardPriorityCount:
+      type: object
+      required: [priority, count]
+      properties:
+        priority:
+          type: string
+          enum: [low, medium, high, unassigned]
+        count:
+          type: integer
+          minimum: 0
+    DashboardAssigneeCount:
+      type: object
+      required: [assigneeId, name, count]
+      properties:
+        assigneeId:
+          type: string
+          nullable: true
+          description: "`null` for the Unassigned bucket."
+        name:
+          type: string
+          description: Empty for the Unassigned bucket; the client supplies the label.
+        count:
+          type: integer
+          minimum: 0
+    DashboardSummary:
+      type: object
+      required: [totals, byStatus, byPriority, byAssignee, generatedAt]
+      properties:
+        totals:
+          $ref: "#/components/schemas/DashboardTotals"
+        byStatus:
+          type: array
+          description: Always lists every Task status, zero-filled.
+          items:
+            $ref: "#/components/schemas/DashboardStatusCount"
+        byPriority:
+          type: array
+          description: Always lists low, medium, high, and unassigned, zero-filled.
+          items:
+            $ref: "#/components/schemas/DashboardPriorityCount"
+        byAssignee:
+          type: array
+          description: The five busiest assignees plus Unassigned when non-empty.
+          items:
+            $ref: "#/components/schemas/DashboardAssigneeCount"
+        generatedAt:
+          type: string
+          format: date-time
+
     Status:
       type: string
       enum: [todo, in-progress, done, blocked]
@@ -470,9 +997,20 @@ components:
           type: string
           description: Stable machine-readable code. One of validation_error, unauthorized, forbidden, not_found, conflict, too_many_requests, internal_error.
           example: not_found
+    RoleSummary:
+      type: object
+      description: The Role identity and display summary embedded in a User.
+      required: [id, title, status]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          $ref: "#/components/schemas/RoleStatus"
     User:
       type: object
-      required: [id, name, email, role, createdAt]
+      required: [id, name, email, roleId, role, createdAt]
       properties:
         id:
           type: string
@@ -481,8 +1019,11 @@ components:
         email:
           type: string
           format: email
+        roleId:
+          type: string
+          description: The identity of the Role the User holds.
         role:
-          $ref: "#/components/schemas/Role"
+          $ref: "#/components/schemas/RoleSummary"
         createdAt:
           type: string
           format: date-time
@@ -526,18 +1067,23 @@ components:
           type: string
     RefreshResponse:
       type: object
-      required: [accessToken, refreshToken]
+      required: [accessToken, refreshToken, user]
       properties:
         accessToken:
           type: string
         refreshToken:
           type: string
+        user:
+          $ref: "#/components/schemas/User"
     UpdateRoleRequest:
       type: object
-      required: [role]
+      required: [roleId]
       properties:
-        role:
-          $ref: "#/components/schemas/Role"
+        roleId:
+          type: string
+          description: >-
+            The identity of an existing, active Role to assign. Unknown or
+            inactive Roles are rejected with 400.
     Task:
       type: object
       required: [id, title, status, createdAt, updatedAt]
@@ -560,8 +1106,11 @@ components:
           nullable: true
         dueDate:
           type: string
-          format: date
+          format: date-time
           nullable: true
+          description: >-
+            ISO 8601 UTC instant. Legacy date-only values are interpreted as
+            local midnight and normalized to an instant on read.
         createdAt:
           type: string
           format: date-time
@@ -588,8 +1137,10 @@ components:
           nullable: true
         dueDate:
           type: string
-          format: date
+          format: date-time
           nullable: true
+          description: >-
+            ISO 8601 date-time instant. Date-only values are rejected.
     TaskUpdateRequest:
       type: object
       properties:
@@ -609,8 +1160,10 @@ components:
           nullable: true
         dueDate:
           type: string
-          format: date
+          format: date-time
           nullable: true
+          description: >-
+            ISO 8601 date-time instant. Date-only values are rejected.
     TaskBulkUpdateRequest:
       type: object
       required: [ids]
@@ -632,8 +1185,10 @@ components:
           nullable: true
         dueDate:
           type: string
-          format: date
+          format: date-time
           nullable: true
+          description: >-
+            ISO 8601 date-time instant. Date-only values are rejected.
     TaskBulkUpdateResponse:
       type: object
       required: [updated, failed]

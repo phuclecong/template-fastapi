@@ -21,8 +21,10 @@ from app.core.security import (
     hash_refresh_token,
     verify_password,
 )
+from app.core.time import ensure_utc, utcnow
+from app.models.role import MEMBER_ROLE_ID, Role
 from app.models.session import Session
-from app.models.user import Role, User, ensure_utc, normalize_email, utcnow
+from app.models.user import User, normalize_email
 from app.schemas.auth import (
     AuthResponse,
     LoginRequest,
@@ -60,24 +62,32 @@ async def _issue_session_tokens(db: AsyncSession, user: User) -> AuthResponse:
     )
 
 
-@router.post("/register", status_code=201, response_model=AuthResponse)
+@router.post("/register", status_code=201, response_model=AuthResponse, operation_id="register")
 async def register(
     payload: RegisterRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     _rate_limit: Annotated[None, Depends(enforce_rate_limit)],
 ) -> AuthResponse:
-    """Create a user (role ``member``) and start a session."""
+    """Create a user holding ``rol_member`` and start a session."""
     email = normalize_email(payload.email)
 
     existing = await db.scalar(select(User).where(User.email == email))
     if existing is not None:
         raise ProblemDetailError(409, ErrorCode.CONFLICT, _DUPLICATE_EMAIL_DETAIL)
 
+    member_role = await db.get(Role, MEMBER_ROLE_ID)
+    if member_role is None:
+        raise ProblemDetailError(
+            500,
+            ErrorCode.INTERNAL_ERROR,
+            "The Member System Role is not seeded.",
+        )
+
     user = User(
         name=payload.name,
         email=email,
         hashed_password=hash_password(payload.password),
-        role=Role.MEMBER.value,
+        role=member_role,
     )
     db.add(user)
     try:
@@ -89,7 +99,7 @@ async def register(
     return await _issue_session_tokens(db, user)
 
 
-@router.post("/login", response_model=AuthResponse)
+@router.post("/login", response_model=AuthResponse, operation_id="login")
 async def login(
     payload: LoginRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -105,7 +115,7 @@ async def login(
     return await _issue_session_tokens(db, user)
 
 
-@router.post("/refresh", response_model=RefreshResponse)
+@router.post("/refresh", response_model=RefreshResponse, operation_id="refresh")
 async def refresh(
     payload: RefreshRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -143,10 +153,18 @@ async def refresh(
 
     access_token = create_access_token(sub=session.user_id, session_id=session.id)
 
-    return RefreshResponse(accessToken=access_token, refreshToken=new_refresh_token)
+    user = await db.get(User, session.user_id)
+    if user is None:
+        raise ProblemDetailError(401, ErrorCode.UNAUTHORIZED, _INVALID_REFRESH_TOKEN_DETAIL)
+
+    return RefreshResponse(
+        accessToken=access_token,
+        refreshToken=new_refresh_token,
+        user=UserOut.model_validate(user),
+    )
 
 
-@router.post("/logout", status_code=204)
+@router.post("/logout", status_code=204, operation_id="logout")
 async def logout(
     session_id: Annotated[str, Depends(get_current_session_id)],
     db: Annotated[AsyncSession, Depends(get_db)],

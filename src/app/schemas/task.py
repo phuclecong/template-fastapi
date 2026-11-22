@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    model_validator,
+)
 
+from app.core.time import ensure_utc
 from app.models.task import Priority, Status
-from app.models.user import ensure_utc
+from app.schemas.common import reject_null_for_non_nullable_fields
 
 
 class Task(BaseModel):
@@ -21,14 +29,14 @@ class Task(BaseModel):
     status: Status
     priority: Priority | None = None
     assignee_id: str | None = Field(default=None, serialization_alias="assigneeId")
-    due_date: date | None = Field(default=None, serialization_alias="dueDate")
+    due_date: datetime | None = Field(default=None, serialization_alias="dueDate")
     created_at: datetime = Field(serialization_alias="createdAt")
     updated_at: datetime = Field(serialization_alias="updatedAt")
 
-    @field_serializer("created_at", "updated_at")
-    def _serialize_datetimes(self, value: datetime) -> datetime:
+    @field_serializer("created_at", "updated_at", "due_date")
+    def _serialize_datetimes(self, value: datetime | None) -> datetime | None:
         # SQLite reads DateTime back naive; normalize so every endpoint emits UTC.
-        return ensure_utc(value)
+        return ensure_utc(value) if value is not None else None
 
 
 class TaskCreateRequest(BaseModel):
@@ -39,7 +47,7 @@ class TaskCreateRequest(BaseModel):
     status: Status = Status.TODO
     priority: Priority | None = None
     assignee_id: str | None = Field(default=None, validation_alias="assigneeId")
-    due_date: date | None = Field(default=None, validation_alias="dueDate")
+    due_date: AwareDatetime | None = Field(default=None, validation_alias="dueDate")
 
 
 class TaskUpdateRequest(BaseModel):
@@ -50,15 +58,13 @@ class TaskUpdateRequest(BaseModel):
     status: Status | None = None
     priority: Priority | None = None
     assignee_id: str | None = Field(default=None, validation_alias="assigneeId")
-    due_date: date | None = Field(default=None, validation_alias="dueDate")
+    due_date: AwareDatetime | None = Field(default=None, validation_alias="dueDate")
 
     @model_validator(mode="after")
     def _reject_null_for_non_nullable_fields(self) -> TaskUpdateRequest:
         """``title`` and ``status`` are not nullable per the contract, unlike the
         clearable fields (description, priority, assigneeId, dueDate)."""
-        for name in ("title", "status"):
-            if name in self.model_fields_set and getattr(self, name) is None:
-                raise ValueError(f"{name} cannot be null")
+        reject_null_for_non_nullable_fields(self, "title", "status")
         return self
 
 
@@ -76,7 +82,7 @@ class TaskBulkUpdateRequest(BaseModel):
     status: Status | None = None
     priority: Priority | None = None
     assignee_id: str | None = Field(default=None, validation_alias="assigneeId")
-    due_date: date | None = Field(default=None, validation_alias="dueDate")
+    due_date: AwareDatetime | None = Field(default=None, validation_alias="dueDate")
 
     @model_validator(mode="after")
     def _reject_null_status(self) -> TaskBulkUpdateRequest:

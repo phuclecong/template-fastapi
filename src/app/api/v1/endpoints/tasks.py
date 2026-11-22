@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import case, func, select
+from pydantic import AwareDatetime
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import FORBIDDEN_DETAIL, get_current_user
 from app.core.database import get_db
 from app.core.errors import ErrorCode, ProblemDetailError
+from app.core.events import publish_task_event
+from app.core.text import escape_like
+from app.core.time import to_utc
 from app.models.task import Priority, Status, Task
-from app.models.user import Role, User
+from app.models.user import User
 from app.schemas.task import (
     BulkFailure,
     TaskBulkUpdateRequest,
@@ -44,9 +47,15 @@ _SORT_KEYS: dict[str, Any] = {
 }
 
 
-def _escape_like(term: str) -> str:
-    """Escape LIKE wildcards so ``q`` matches a literal substring, not a pattern."""
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+def _validated_values(values: list[str] | None, allowed: set[str], field: str) -> list[str]:
+    """Drop empty repeats and reject values outside ``allowed`` as malformed (422)."""
+    cleaned = [value for value in (values or []) if value != ""]
+    for value in cleaned:
+        if value not in allowed:
+            raise ProblemDetailError(
+                422, ErrorCode.VALIDATION_ERROR, f"Invalid {field} value: {value}."
+            )
+    return cleaned
 
 
 async def _get_task_or_404(db: AsyncSession, task_id: str) -> Task:
@@ -65,8 +74,8 @@ async def _require_assignee(db: AsyncSession, assignee_id: str) -> None:
 
 
 def _is_assignee_or_admin(task: Task, user: User) -> bool:
-    """Return True if ``user`` is an admin or the task's assignee."""
-    return user.role == Role.ADMIN.value or task.assignee_id == user.id
+    """Return True if ``user`` is an Administrator or the task's assignee."""
+    return user.is_administrator or task.assignee_id == user.id
 
 
 def _ensure_assignee_or_admin(task: Task, user: User) -> None:
@@ -115,17 +124,17 @@ def _apply_status_transition(task: Task, new_status: Status) -> None:
     raise ProblemDetailError(400, ErrorCode.VALIDATION_ERROR, _INVALID_STATUS_TRANSITION_DETAIL)
 
 
-@router.get("", response_model=list[TaskOut])
+@router.get("", response_model=list[TaskOut], operation_id="listTasks")
 async def list_tasks(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
     _current_user: Annotated[User, Depends(get_current_user)],
     q: Annotated[str | None, Query()] = None,
-    status: Annotated[Status | None, Query()] = None,
-    priority: Annotated[Priority | None, Query()] = None,
-    assignee_id: Annotated[str | None, Query(alias="assigneeId")] = None,
-    due_date_gte: Annotated[date | None, Query(alias="dueDate_gte")] = None,
-    due_date_lte: Annotated[date | None, Query(alias="dueDate_lte")] = None,
+    status: Annotated[list[str] | None, Query()] = None,
+    priority: Annotated[list[str] | None, Query()] = None,
+    assignee_id: Annotated[list[str] | None, Query(alias="assigneeId")] = None,
+    due_date_gte: Annotated[AwareDatetime | None, Query(alias="dueDate_gte")] = None,
+    due_date_lte: Annotated[AwareDatetime | None, Query(alias="dueDate_lte")] = None,
     _start: Annotated[int, Query(ge=0)] = 0,
     _end: Annotated[int | None, Query(ge=0)] = None,
     _sort: Annotated[str, Query()] = "title",
@@ -134,27 +143,44 @@ async def list_tasks(
     """Return tasks filtered, sorted, and paginated, with the total in ``x-total-count``."""
     conditions: list[Any] = []
     if q is not None:
-        conditions.append(Task.title.ilike(f"%{_escape_like(q)}%", escape="\\"))
-    if status is not None:
-        conditions.append(Task.status == status.value)
-    if priority is not None:
-        conditions.append(Task.priority == priority.value)
-    if assignee_id is not None:
-        if assignee_id == "unassigned":
-            conditions.append(Task.assignee_id.is_(None))
-        else:
-            conditions.append(Task.assignee_id == assignee_id)
+        conditions.append(Task.title.ilike(f"%{escape_like(q)}%", escape="\\"))
+    statuses = _validated_values(status, {value.value for value in Status}, "status")
+    if statuses:
+        conditions.append(Task.status.in_(statuses))
+    priorities = _validated_values(priority, {value.value for value in Priority}, "priority")
+    if priorities:
+        conditions.append(Task.priority.in_(priorities))
+    assignees = [value for value in (assignee_id or []) if value != ""]
+    if assignees:
+        # ``unassigned`` matches a null Assignee; other values must be existing Users.
+        user_ids = list(dict.fromkeys(value for value in assignees if value != "unassigned"))
+        if user_ids:
+            existing = set((await db.scalars(select(User.id).where(User.id.in_(user_ids)))).all())
+            if any(user_id not in existing for user_id in user_ids):
+                raise ProblemDetailError(
+                    400, ErrorCode.VALIDATION_ERROR, _ASSIGNEE_NOT_FOUND_DETAIL
+                )
+        assignee_conditions: list[Any] = []
+        if user_ids:
+            assignee_conditions.append(Task.assignee_id.in_(user_ids))
+        if "unassigned" in assignees:
+            assignee_conditions.append(Task.assignee_id.is_(None))
+        conditions.append(or_(*assignee_conditions))
     if due_date_gte is not None:
-        conditions.append(Task.due_date >= due_date_gte)
+        conditions.append(Task.due_date >= to_utc(due_date_gte))
     if due_date_lte is not None:
-        conditions.append(Task.due_date <= due_date_lte)
+        conditions.append(Task.due_date <= to_utc(due_date_lte))
 
     total = await db.scalar(select(func.count()).select_from(Task).where(*conditions))
 
     sort_key = _SORT_KEYS.get(_sort)
     if sort_key is None:
         raise ProblemDetailError(400, ErrorCode.VALIDATION_ERROR, _INVALID_SORT_FIELD_DETAIL)
-    order = sort_key.asc() if _order == "asc" else sort_key.desc()
+    if _sort == "dueDate":
+        # Nulls always sort last, regardless of direction.
+        order = sort_key.asc().nulls_last() if _order == "asc" else sort_key.desc().nulls_last()
+    else:
+        order = sort_key.asc() if _order == "asc" else sort_key.desc()
 
     statement = select(Task).where(*conditions).order_by(order, Task.id).offset(_start)
     if _end is not None:
@@ -165,7 +191,7 @@ async def list_tasks(
     return tasks
 
 
-@router.post("", status_code=201, response_model=TaskOut)
+@router.post("", status_code=201, response_model=TaskOut, operation_id="createTask")
 async def create_task(
     payload: TaskCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -186,14 +212,18 @@ async def create_task(
         previous_status=Status.TODO.value if payload.status == Status.BLOCKED else None,
         priority=payload.priority.value if payload.priority is not None else None,
         assignee_id=payload.assignee_id,
-        due_date=payload.due_date,
+        due_date=to_utc(payload.due_date),
     )
     db.add(task)
     await db.flush()
+    # Commit before publishing so a connected client that refetches on the event
+    # observes the new task. The request-scoped commit in get_db is then a no-op.
+    await db.commit()
+    publish_task_event("created", [task.id])
     return task
 
 
-@router.patch("/bulk", response_model=TaskBulkUpdateResponse)
+@router.patch("/bulk", response_model=TaskBulkUpdateResponse, operation_id="bulkUpdateTasks")
 async def bulk_update_tasks(
     payload: TaskBulkUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -205,6 +235,7 @@ async def bulk_update_tasks(
     in ``failed`` with a reason (not found, forbidden, or an invalid status transition).
     """
     updated = 0
+    updated_ids: list[str] = []
     failed: list[BulkFailure] = []
     updatable: list[Task] = []
     seen: set[str] = set()
@@ -240,18 +271,21 @@ async def bulk_update_tasks(
             if "assignee_id" in payload.model_fields_set:
                 task.assignee_id = payload.assignee_id
             if "due_date" in payload.model_fields_set:
-                task.due_date = payload.due_date
+                task.due_date = to_utc(payload.due_date)
         except ProblemDetailError as exc:
             failed.append(BulkFailure(id=task.id, reason=exc.detail))
             continue
 
         updated += 1
+        updated_ids.append(task.id)
 
     await db.flush()
+    await db.commit()
+    publish_task_event("updated", updated_ids)
     return TaskBulkUpdateResponse(updated=updated, failed=failed)
 
 
-@router.get("/{id}", response_model=TaskOut)
+@router.get("/{id}", response_model=TaskOut, operation_id="getTask")
 async def get_task(
     id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -261,7 +295,7 @@ async def get_task(
     return await _get_task_or_404(db, id)
 
 
-@router.patch("/{id}", response_model=TaskOut)
+@router.patch("/{id}", response_model=TaskOut, operation_id="updateTask")
 async def update_task(
     id: str,
     payload: TaskUpdateRequest,
@@ -282,7 +316,7 @@ async def update_task(
     if "priority" in fields:
         task.priority = payload.priority.value if payload.priority is not None else None
     if "due_date" in fields:
-        task.due_date = payload.due_date
+        task.due_date = to_utc(payload.due_date)
     if "assignee_id" in fields:
         if payload.assignee_id is not None:
             await _require_assignee(db, payload.assignee_id)
@@ -291,10 +325,12 @@ async def update_task(
         _apply_status_transition(task, payload.status)
 
     await db.flush()
+    await db.commit()
+    publish_task_event("updated", [task.id])
     return task
 
 
-@router.delete("/{id}", status_code=204)
+@router.delete("/{id}", status_code=204, operation_id="deleteTask")
 async def delete_task(
     id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -306,4 +342,6 @@ async def delete_task(
     _ensure_assignee_or_admin(task, current_user)
 
     await db.delete(task)
+    await db.commit()
+    publish_task_event("deleted", [id])
     return Response(status_code=204)

@@ -6,9 +6,9 @@ from httpx import AsyncClient
 
 from app.core.ratelimit import SlidingWindowRateLimiter, get_auth_rate_limiter
 from app.main import app
+from tests.helpers import PASSWORD as _PASSWORD
 
 _LIMIT = 3
-_PASSWORD = "correct horse battery staple"
 
 
 def _install_limiter() -> None:
@@ -19,9 +19,10 @@ def _install_limiter() -> None:
 def _assert_too_many_requests(response: Any) -> None:
     assert response.status_code == 429
     body = response.json()
-    assert set(body) == {"type", "title", "status", "detail", "code"}
+    assert set(body) == {"type", "title", "status", "detail", "code", "message"}
     assert body["status"] == 429
     assert body["code"] == "too_many_requests"
+    assert body["message"] == body["detail"]
     assert body["type"].endswith("/too_many_requests")
     assert body["title"] == "Too many requests"
 

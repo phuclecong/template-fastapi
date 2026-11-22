@@ -2,22 +2,24 @@
 
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.security import hash_password
 from app.models.task import Status, Task
-from app.models.user import Role, User
-
-_PASSWORD = "correct horse battery staple"
+from tests.helpers import (
+    PASSWORD as _PASSWORD,
+)
+from tests.helpers import (
+    auth as _auth,
+)
+from tests.helpers import (
+    create_admin as _create_admin,
+)
 
 _FORBIDDEN_REASON = "You do not have permission to perform this action."
 _NOT_FOUND_REASON = "No task exists with this id."
 _INVALID_STATUS_REASON = "Invalid status transition."
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def _register(
@@ -39,23 +41,6 @@ async def _login(client: AsyncClient, *, email: str) -> str:
         json={"email": email, "password": _PASSWORD},
     )
     return response.json()["accessToken"]
-
-
-async def _create_admin(
-    factory: async_sessionmaker[AsyncSession],
-    *,
-    email: str = "admin@example.com",
-) -> str:
-    user = User(
-        name="Admin",
-        email=email,
-        hashed_password=hash_password(_PASSWORD),
-        role=Role.ADMIN.value,
-    )
-    async with factory() as db:
-        db.add(user)
-        await db.commit()
-        return user.id
 
 
 async def _create_task(
@@ -275,14 +260,26 @@ async def test_bulk_sets_due_date(client: AsyncClient) -> None:
     response = await _bulk(
         client,
         token=token,
-        json={"ids": [task["id"]], "dueDate": "2026-12-31"},
+        json={"ids": [task["id"]], "dueDate": "2026-12-31T18:30:00+05:30"},
     )
 
     assert response.status_code == 200
     assert response.json() == {"updated": 1, "failed": []}
 
     after = await client.get(f"/api/v1/tasks/{task['id']}", headers=_auth(token))
-    assert after.json()["dueDate"] == "2026-12-31"
+    assert after.json()["dueDate"] == "2026-12-31T13:00:00Z"
+
+
+@pytest.mark.parametrize("due_date", ["2026-12-31", "2026-12-31T10:30:00"])
+async def test_bulk_rejects_non_instant_due_date(client: AsyncClient, due_date: str) -> None:
+    member = await _register(client, email="ada@example.com")
+    token = member["accessToken"]
+    task = await _create_task(client, token=token, assignee_id=member["user"]["id"])
+
+    response = await _bulk(client, token=token, json={"ids": [task["id"]], "dueDate": due_date})
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
 
 
 async def test_bulk_null_clears_priority_assignee_and_due_date(client: AsyncClient) -> None:
@@ -293,7 +290,7 @@ async def test_bulk_null_clears_priority_assignee_and_due_date(client: AsyncClie
         token=token,
         assignee_id=member["user"]["id"],
         priority="high",
-        dueDate="2026-01-01",
+        dueDate="2026-01-01T00:00:00+00:00",
     )
 
     response = await _bulk(

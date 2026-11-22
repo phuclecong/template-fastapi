@@ -6,8 +6,7 @@ import jwt
 from httpx import AsyncClient
 
 from app.core.config import get_settings
-
-_PASSWORD = "correct horse battery staple"
+from tests.helpers import PASSWORD as _PASSWORD
 
 
 def _register(
@@ -42,7 +41,8 @@ async def test_login_returns_200_with_tokens_and_user(client: AsyncClient) -> No
     body = response.json()
     assert set(body) == {"accessToken", "refreshToken", "user"}
     assert body["user"]["email"] == "ada@example.com"
-    assert body["user"]["role"] == "member"
+    assert body["user"]["roleId"] == "rol_member"
+    assert body["user"]["role"] == {"id": "rol_member", "title": "Member", "status": "active"}
     assert body["user"]["id"] == user_id
     assert body["accessToken"]
     assert body["refreshToken"]
@@ -93,10 +93,13 @@ async def test_refresh_rotates_refresh_token_in_same_session(client: AsyncClient
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"accessToken", "refreshToken"}
+    assert set(body) == {"accessToken", "refreshToken", "user"}
     assert body["refreshToken"] != first["refreshToken"]
     assert body["refreshToken"]
     assert body["accessToken"]
+    assert body["user"]["id"] == first["user"]["id"]
+    assert body["user"]["roleId"] == "rol_member"
+    assert body["user"]["role"] == {"id": "rol_member", "title": "Member", "status": "active"}
     # Same session (sid unchanged), same user.
     assert _sid(body["accessToken"]) == _sid(first["accessToken"])
 
