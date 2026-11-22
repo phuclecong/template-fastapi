@@ -8,9 +8,9 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from app.core.config import get_settings
-from app.core.database import Base
 import app.models  # noqa: F401  # ensure models register with Base.metadata
+from app.core.config import get_settings
+from app.core.database import Base, connect_args_for
 
 config = context.config
 
@@ -49,11 +49,13 @@ def _run_migrations_sync(connection: Connection) -> None:
 async def _run_migrations_online() -> None:
     """Run migrations against an async engine."""
     configuration = config.get_section(config.config_ini_section) or {}
-    configuration["sqlalchemy.url"] = _database_url()
+    url = _database_url()
+    configuration["sqlalchemy.url"] = url
     connectable = async_engine_from_config(
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args_for(url),
     )
     async with connectable.connect() as connection:
         await connection.run_sync(_run_migrations_sync)
