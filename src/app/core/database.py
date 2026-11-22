@@ -12,7 +12,22 @@ class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
 
 
-engine = create_async_engine(get_settings().database_url)
+def connect_args_for(database_url: str) -> dict[str, object]:
+    """Driver arguments required by ``database_url``.
+
+    Transaction-mode poolers (PgBouncer, Supavisor on Supabase port 6543) do not
+    support named prepared statements, so disable both the asyncpg and SQLAlchemy
+    statement caches. Session-mode/direct connections tolerate this setting.
+    """
+    if database_url.startswith("postgresql+asyncpg://"):
+        return {"statement_cache_size": 0, "prepared_statement_cache_size": 0}
+    return {}
+
+
+_settings = get_settings()
+engine = create_async_engine(
+    _settings.database_url, connect_args=connect_args_for(_settings.database_url)
+)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
